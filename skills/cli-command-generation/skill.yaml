@@ -1,0 +1,9 @@
+name: cli-command-generation
+description: Designs and generates Argos CLI commands, slash commands, help text, arguments, confirmations, and tests.
+triggers:
+  - cli command
+  - slash command
+  - typer command
+  - command UX
+permission_profile: advisory
+instructions_file: prompt.md

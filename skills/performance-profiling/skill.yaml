@@ -1,0 +1,9 @@
+name: performance-profiling
+description: Profiles Argos performance across CLI startup, Ollama calls, planning, execution, file search, and memory handling.
+triggers:
+  - profile performance
+  - performance
+  - latency
+  - optimize argos
+permission_profile: advisory
+instructions_file: prompt.md

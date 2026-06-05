@@ -1,0 +1,9 @@
+name: dataset-curation
+description: Curates Argos datasets by deduplicating examples, checking labels, balancing intents, and filtering unsafe or low-quality rows.
+triggers:
+  - curate dataset
+  - clean dataset
+  - review dataset
+  - dataset quality
+permission_profile: advisory
+instructions_file: prompt.md

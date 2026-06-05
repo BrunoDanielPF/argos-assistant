@@ -1,0 +1,9 @@
+name: mcp-server-creation
+description: Guides creation of local MCP servers for Argos with tool schemas, safe execution boundaries, and integration tests.
+triggers:
+  - mcp server
+  - create mcp
+  - mcp tool
+  - tool server
+permission_profile: advisory
+instructions_file: prompt.md

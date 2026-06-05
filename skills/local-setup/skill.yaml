@@ -1,0 +1,9 @@
+name: local-setup
+description: Guides local setup of Argos on Windows, including Python environment, editable install, Ollama runtime, and smoke tests.
+triggers:
+  - setup local
+  - install argos
+  - local environment
+  - ollama setup
+permission_profile: advisory
+instructions_file: prompt.md

@@ -1,0 +1,9 @@
+name: project-security
+description: Reviews Argos security for local command execution, file access, MCP tools, skills, prompts, configs, and dataset handling.
+triggers:
+  - security
+  - threat model
+  - unsafe command
+  - permission policy
+permission_profile: advisory
+instructions_file: prompt.md

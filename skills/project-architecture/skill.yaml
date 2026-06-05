@@ -1,0 +1,9 @@
+name: project-architecture
+description: Guides architectural decisions for Argos modules, boundaries, data flow, risk, and phased implementation.
+triggers:
+  - architecture
+  - design module
+  - project structure
+  - refactor architecture
+permission_profile: advisory
+instructions_file: prompt.md

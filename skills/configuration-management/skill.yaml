@@ -1,0 +1,9 @@
+name: configuration-management
+description: Guides Argos configuration for model, Ollama endpoint, timeouts, skill paths, safety policy, and local environment variables.
+triggers:
+  - configuration
+  - config
+  - env vars
+  - settings
+permission_profile: advisory
+instructions_file: prompt.md

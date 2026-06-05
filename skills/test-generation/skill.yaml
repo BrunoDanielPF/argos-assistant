@@ -1,0 +1,9 @@
+name: test-generation
+description: Generates focused tests for Argos planner, CLI, executor, skills, MCP integration, and session memory.
+triggers:
+  - generate tests
+  - test coverage
+  - pytest
+  - regression test
+permission_profile: advisory
+instructions_file: prompt.md

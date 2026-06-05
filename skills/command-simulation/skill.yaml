@@ -1,0 +1,9 @@
+name: command-simulation
+description: Simulates Argos command plans without executing side effects, useful for dry-runs, policy review, and dataset examples.
+triggers:
+  - simulate command
+  - dry run
+  - command simulation
+  - preview action
+permission_profile: advisory
+instructions_file: prompt.md

@@ -1,0 +1,6 @@
+name: sample-productivity
+description: Helps draft summaries and next-step suggestions.
+triggers:
+  - summarize
+  - next step
+permission_profile: advisory

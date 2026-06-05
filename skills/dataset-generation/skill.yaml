@@ -1,0 +1,9 @@
+name: dataset-generation
+description: Generates training and evaluation datasets for Argos commands, tool plans, answer style, and local automation tasks.
+triggers:
+  - generate dataset
+  - training data
+  - eval data
+  - examples dataset
+permission_profile: advisory
+instructions_file: prompt.md

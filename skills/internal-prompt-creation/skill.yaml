@@ -1,0 +1,9 @@
+name: internal-prompt-creation
+description: Creates and revises internal prompts for Argos planner, persona, skills, command routing, and structured JSON outputs.
+triggers:
+  - internal prompt
+  - system prompt
+  - planner prompt
+  - prompt template
+permission_profile: advisory
+instructions_file: prompt.md

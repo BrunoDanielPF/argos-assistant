@@ -1,0 +1,9 @@
+name: model-benchmarking
+description: Designs and runs benchmarks for local Argos models across planning accuracy, latency, tool-use reliability, and answer quality.
+triggers:
+  - benchmark model
+  - compare models
+  - model evaluation
+  - qwen benchmark
+permission_profile: advisory
+instructions_file: prompt.md
