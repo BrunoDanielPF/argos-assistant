@@ -55,6 +55,7 @@ def test_argos_project_skills_catalog_is_loadable():
         "cli-command-generation",
         "project-security",
         "command-simulation",
+        "documentation-maintenance",
     }
 
     assert expected_names.issubset(by_name)

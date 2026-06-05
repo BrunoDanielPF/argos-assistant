@@ -1,12 +1,82 @@
 # Argos
 
-Argos is a local-first Windows assistant MVP built in Python with Ollama.
+Argos e um assistente pessoal local para Windows, construido em Python e integrado ao Ollama.
 
-## Requirements
+O objetivo do projeto e evoluir de uma CLI inteligente para um assistente assincrono residente no computador, capaz de ser acionado por voz, responder por voz, configurar ferramentas locais e executar tarefas na maquina pessoal com controle de seguranca.
+
+## Contexto
+
+Argos nasce como um assistente offline-first. A primeira versao roda no terminal, usa um modelo local via Ollama e ja possui uma base modular para planejar comandos, aplicar politica de permissao e executar acoes locais.
+
+A direcao do produto e transformar esse nucleo em um assistente de computador:
+
+- acionamento por CLI hoje e por voz/hotkey no roadmap
+- resposta por texto hoje e por voz no roadmap
+- uso local e offline sempre que o modelo e as ferramentas estiverem disponiveis na maquina
+- inteligencia para configurar tools, skills e MCPs
+- capacidade de chamar programas, abrir arquivos, pesquisar arquivos e operar ferramentas locais
+- execucao controlada por politica de seguranca antes de qualquer efeito colateral relevante
+
+## Estado atual
+
+O MVP atual entrega:
+
+- comando principal `argos`
+- modo one-shot com `argos chat "..."`
+- modo interativo no terminal
+- integracao com Ollama usando modelo local
+- abertura de URLs
+- abertura de aplicativos conhecidos
+- abertura de arquivos
+- busca de arquivos com confirmacao
+- abertura de resultado por indice no modo interativo
+- memoria curta de sessao
+- catalogo local de capabilities
+- politicas `allow`, `confirm` e `blocked`
+- loader de skills locais
+- adaptador MCP minimo
+- catalogo inicial de skills do projeto
+
+## Roadmap
+
+### Fase 1: CLI operacional
+
+- melhorar comandos interativos como `/help`, `/skills`, `/tools`, `/model` e `/history`
+- exibir resultados de busca com indices mais claros
+- adicionar simulacao de comandos antes da execucao
+- melhorar sugestoes contextuais
+- integrar skills no prompt do planner
+
+### Fase 2: Tools e automacao local
+
+- expandir `open_application` com catalogo configuravel de programas
+- adicionar execucao controlada de comandos shell
+- criar configuracao local para tools, paths e aliases
+- permitir que Argos configure ferramentas pessoais com validacao
+- melhorar suporte a MCP servers locais
+
+### Fase 3: Voz e assistente residente
+
+- adicionar entrada por voz com STT local
+- adicionar resposta por voz com TTS local
+- criar acionamento por hotkey ou wake command
+- rodar Argos em segundo plano
+- manter estado entre sessoes
+- permitir tarefas assincronas com fila, logs e notificacoes
+
+### Fase 4: Inteligencia, avaliacao e tuning
+
+- gerar datasets de comandos, planos e respostas
+- criar curadoria de dataset
+- comparar modelos locais por benchmark
+- medir latencia e uso de recursos
+- preparar LoRA/QLoRA para especializacao futura
+
+## Requisitos
 
 - Python 3.12
-- Ollama running locally
-- A local model such as `qwen3:8b`
+- Ollama rodando localmente
+- um modelo local, por exemplo `qwen3:8b`
 
 ## Setup
 
@@ -17,48 +87,49 @@ pip install -e .[dev]
 ollama pull qwen3:8b
 ```
 
-## Usage
+## Uso
+
+Use `argos` para conversa continua no terminal:
 
 ```bash
 argos
-argos chat "open ollama website"
-argos chat "summarize what an MCP server is"
 ```
 
-Use `argos` para conversa continua no terminal. Use `argos chat "..."` para uma unica solicitacao.
-`assistant` continua disponivel como alias de compatibilidade.
+Exemplos no modo interativo:
 
-## How To Use `argos chat`
+```text
+argos: oi
+argos: open calculator
+argos: find README.md
+argos: /open 1
+argos: exit
+```
 
-The CLI sends your prompt to the local model through Ollama, converts the model output into either:
-
-- a direct answer
-- an executable action such as opening a URL or searching files
-
-Basic examples:
+Use `argos chat "..."` para uma unica solicitacao:
 
 ```bash
-argos
 argos chat "open ollama website"
 argos chat "summarize what an MCP server is"
-argos chat "find notes.txt in C:\\Users\\frand\\Documents"
-argos interactive
+argos chat "find README.md"
 ```
 
-Expected behavior:
+O comando `assistant` ainda existe como alias de compatibilidade, mas o nome oficial do projeto e `argos`.
 
-- if the model returns an action, the assistant executes the supported capability and prints the result
-- if the model returns an answer, the assistant prints the answer text
-- action results are printed with `OK` or `ERROR` status
-- after each response, the assistant prints one or more next-step suggestions
+## Comandos interativos
 
-Sensitive capabilities such as file search require confirmation before execution. The CLI shows the capability name and arguments, then asks whether the action should continue.
+- `/cwd <path>`: atualiza o diretorio de contexto da sessao
+- `/pwd`: mostra o diretorio atual da sessao
+- `/context`: mostra o contexto atual da sessao
+- `/history`: mostra o historico da sessao
+- `/open <path>`: abre um arquivo pelo caminho
+- `/open <indice>`: abre um item da ultima busca por indice
+- `exit` ou `quit`: encerra a sessao
 
-## Project Skills
+## Skills do projeto
 
-Argos loads local skill metadata from `skills/<skill-name>/skill.yaml`. Each project skill also includes a `prompt.md` with operational guidance.
+Argos carrega metadados de skills locais em `skills/<skill-name>/skill.yaml`. Cada skill tambem possui um `prompt.md` com orientacao operacional.
 
-Initial project-management skills:
+Skills iniciais:
 
 - `project-architecture`
 - `mcp-server-creation`
@@ -73,84 +144,61 @@ Initial project-management skills:
 - `cli-command-generation`
 - `project-security`
 - `command-simulation`
+- `documentation-maintenance`
 
-These skills are advisory in this phase. They guide planning and generation, but they do not execute local actions or bypass executor policy.
+Nesta fase, as skills sao consultivas. Elas orientam planejamento, documentacao e geracao de artefatos, mas nao executam acoes locais nem ignoram a politica do executor.
 
-## How To Test
+## Seguranca
 
-### 1. Run the automated tests
+Argos separa raciocinio de execucao. O modelo local e o planner podem propor acoes, mas efeitos colaterais passam pelo executor e pela politica de permissao.
+
+Classes de politica:
+
+- `allow`: acoes simples, como abrir URL, aplicativo conhecido ou arquivo
+- `confirm`: acoes sensiveis, como busca de arquivos ou futuras operacoes shell
+- `blocked`: acoes destrutivas ou nao suportadas
+
+Skills, MCPs e prompts internos nao devem executar diretamente acoes na maquina. Qualquer acao local deve passar pelo mesmo fluxo de politica e confirmacao.
+
+## Testes
+
+Rode a suite automatizada:
 
 ```bash
 python -m pytest -q
 ```
 
-Expected result:
-
-- all tests pass
-
-### 2. Confirm the CLI is installed
+Verifique a CLI:
 
 ```bash
 argos --help
 ```
 
-Expected result:
+Smoke test manual:
 
-- the help output lists the `chat` command
+```bash
+argos chat "open ollama website"
+```
 
-### 3. Confirm the Ollama runtime is available
+## Ollama
 
-If the `ollama` command is available:
+Se o comando `ollama` estiver disponivel:
 
 ```bash
 ollama list
 ollama pull qwen3:8b
 ```
 
-If the Ollama daemon is already listening on `http://localhost:11434` but the CLI is not on `PATH`, you can pull the model through the local API:
+Se o daemon estiver ativo em `http://localhost:11434`, mas o comando `ollama` nao estiver no `PATH`, o modelo pode ser baixado pela API local:
 
 ```powershell
 $body = @{ name = 'qwen3:8b'; stream = $false } | ConvertTo-Json
 Invoke-RestMethod -Uri 'http://localhost:11434/api/pull' -Method Post -ContentType 'application/json' -Body $body
 ```
 
-### 4. Run a manual smoke test
-
-```bash
-argos chat "open ollama website"
-```
-
-Expected result:
-
-- the assistant returns a success message
-- the browser opens `https://ollama.com`
-- at least one suggestion is printed below the main result
-
-### 5. Run an interactive smoke test
-
-```bash
-argos
-```
-
-Example session:
-
-```text
-argos: open ollama website
-[OK] Opened https://ollama.com
-- Ask me to open documentation next
-argos: exit
-Bye.
-```
-
-`argos interactive` continua disponivel e tem o mesmo comportamento. O comando simples `argos` agora entra nesse modo por padrao.
-
 ## Troubleshooting
 
-- `ollama` not recognized:
-  the Ollama CLI is not installed or not on `PATH`
-- `ConnectError` or connection refused:
-  the Ollama daemon is not running on `localhost:11434`
-- `{"models":[]}` from `/api/tags`:
-  the daemon is up, but no model has been pulled yet
-- planner/action mismatch from the local model:
-  rerun after updating to the latest project code, which now normalizes both `capability/arguments` and `action/<fields>` action formats
+- `ollama` nao reconhecido: o CLI do Ollama nao esta instalado ou nao esta no `PATH`
+- `ConnectError` ou connection refused: o daemon do Ollama nao esta rodando em `localhost:11434`
+- `{"models":[]}` em `/api/tags`: o daemon esta ativo, mas nenhum modelo foi baixado
+- planner retornando formato inesperado: atualizar o codigo e repetir, pois o planner normaliza formatos comuns como `capability/arguments` e `action/<fields>`

@@ -1,0 +1,10 @@
+name: documentation-maintenance
+description: Mantem a documentacao do Argos em portugues, com contexto de produto, roadmap, uso, setup, testes e padroes de escrita consistentes.
+triggers:
+  - documentacao
+  - README
+  - roadmap
+  - docs
+  - contexto do projeto
+permission_profile: advisory
+instructions_file: prompt.md
