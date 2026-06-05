@@ -6,15 +6,17 @@ O objetivo do projeto e evoluir de uma CLI inteligente para um assistente assinc
 
 ## Contexto
 
-Argos nasce como um assistente offline-first. A primeira versao roda no terminal, usa um modelo local via Ollama e ja possui uma base modular para planejar comandos, aplicar politica de permissao e executar acoes locais.
+Argos nasce como um assistente offline-first. A primeira versao roda no terminal, usa um modelo local leve via Ollama e ja possui uma base modular para planejar comandos, aplicar politica de permissao e executar acoes locais.
 
 A direcao do produto e transformar esse nucleo em um assistente de computador:
 
 - acionamento por CLI hoje e por voz/hotkey no roadmap
 - resposta por texto hoje e por voz no roadmap
 - uso local e offline sempre que o modelo e as ferramentas estiverem disponiveis na maquina
+- preferencia por modelos menores e mais eficientes para resposta rapida no computador pessoal
 - inteligencia para configurar tools, skills e MCPs
 - capacidade de chamar programas, abrir arquivos, pesquisar arquivos e operar ferramentas locais
+- memoria progressiva para aprender preferencias, correcoes e procedimentos recorrentes
 - execucao controlada por politica de seguranca antes de qualquer efeito colateral relevante
 
 ## Estado atual
@@ -37,6 +39,41 @@ O MVP atual entrega:
 - adaptador MCP minimo
 - catalogo inicial de skills do projeto
 
+## Estrategia de modelo
+
+O padrao do Argos deve priorizar eficiencia, baixa latencia e uso local confortavel. Por isso, o modelo operacional padrao e menor, atualmente `qwen3:4b`.
+
+Diretrizes:
+
+- usar modelo pequeno para comandos, planejamento simples, CLI e automacao local
+- reservar modelos maiores para tarefas mais complexas, benchmark ou fallback configuravel
+- manter o modelo configuravel para permitir troca conforme hardware e qualidade desejada
+- medir qualidade por planejamento correto, JSON valido, latencia e consumo de recursos
+
+Modelo recomendado para o MVP:
+
+- padrao: `qwen3:4b`
+- alternativa mais forte: `qwen3:8b`
+
+## Memoria progressiva
+
+Argos deve evoluir para ter memoria de longo prazo semelhante a outros assistentes modernos. Quando o usuario corrigir uma resposta, ensinar uma preferencia ou definir um procedimento recorrente, o Argos deve propor salvar esse aprendizado.
+
+Modelo de memoria planejado:
+
+- memoria curta: contexto da sessao atual
+- memoria longa: arquivos Markdown semanticos na pasta do usuario
+- pasta sugerida: `%USERPROFILE%\.argos\memory`
+- arquivos por tema, como `preferencias.md`, `projetos.md`, `ferramentas.md`, `comandos.md` e `correcoes.md`
+
+Regras:
+
+- nunca salvar segredos, tokens, senhas ou dados sensiveis
+- pedir confirmacao antes de persistir memoria
+- registrar aprendizados pequenos, objetivos e verificaveis
+- recuperar memorias relevantes semanticamente antes de planejar respostas ou acoes
+- manter o usuario capaz de ler, editar e apagar as memorias manualmente
+
 ## Roadmap
 
 ### Fase 1: CLI operacional
@@ -46,6 +83,7 @@ O MVP atual entrega:
 - adicionar simulacao de comandos antes da execucao
 - melhorar sugestoes contextuais
 - integrar skills no prompt do planner
+- permitir consulta basica da memoria persistente
 
 ### Fase 2: Tools e automacao local
 
@@ -54,6 +92,7 @@ O MVP atual entrega:
 - criar configuracao local para tools, paths e aliases
 - permitir que Argos configure ferramentas pessoais com validacao
 - melhorar suporte a MCP servers locais
+- criar escrita controlada de memoria em Markdown
 
 ### Fase 3: Voz e assistente residente
 
@@ -63,6 +102,7 @@ O MVP atual entrega:
 - rodar Argos em segundo plano
 - manter estado entre sessoes
 - permitir tarefas assincronas com fila, logs e notificacoes
+- usar memoria persistente para personalizar respostas e acoes
 
 ### Fase 4: Inteligencia, avaliacao e tuning
 
@@ -71,12 +111,13 @@ O MVP atual entrega:
 - comparar modelos locais por benchmark
 - medir latencia e uso de recursos
 - preparar LoRA/QLoRA para especializacao futura
+- avaliar recuperacao semantica da memoria persistente
 
 ## Requisitos
 
 - Python 3.12
 - Ollama rodando localmente
-- um modelo local, por exemplo `qwen3:8b`
+- um modelo local, por exemplo `qwen3:4b`
 
 ## Setup
 
@@ -84,7 +125,7 @@ O MVP atual entrega:
 python -m venv .venv
 .venv\Scripts\activate
 pip install -e .[dev]
-ollama pull qwen3:8b
+ollama pull qwen3:4b
 ```
 
 ## Uso
@@ -145,6 +186,7 @@ Skills iniciais:
 - `project-security`
 - `command-simulation`
 - `documentation-maintenance`
+- `long-term-memory`
 
 Nesta fase, as skills sao consultivas. Elas orientam planejamento, documentacao e geracao de artefatos, mas nao executam acoes locais nem ignoram a politica do executor.
 
@@ -186,13 +228,13 @@ Se o comando `ollama` estiver disponivel:
 
 ```bash
 ollama list
-ollama pull qwen3:8b
+ollama pull qwen3:4b
 ```
 
 Se o daemon estiver ativo em `http://localhost:11434`, mas o comando `ollama` nao estiver no `PATH`, o modelo pode ser baixado pela API local:
 
 ```powershell
-$body = @{ name = 'qwen3:8b'; stream = $false } | ConvertTo-Json
+$body = @{ name = 'qwen3:4b'; stream = $false } | ConvertTo-Json
 Invoke-RestMethod -Uri 'http://localhost:11434/api/pull' -Method Post -ContentType 'application/json' -Body $body
 ```
 

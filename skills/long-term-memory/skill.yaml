@@ -1,0 +1,10 @@
+name: long-term-memory
+description: Planeja e mantem memoria progressiva do Argos em arquivos Markdown semanticos na pasta do usuario, a partir de correcoes, preferencias e aprendizados validados.
+triggers:
+  - memoria
+  - aprendizado
+  - lembrar
+  - correcao do usuario
+  - long term memory
+permission_profile: advisory
+instructions_file: prompt.md
