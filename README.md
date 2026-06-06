@@ -214,7 +214,14 @@ argos chat "find README.md"
 
 O comando `assistant` ainda existe como alias de compatibilidade, mas o nome oficial do projeto e `argos`.
 
-Durante chamadas ao modelo, a CLI mostra `Argos esta pensando...` enquanto aguarda a resposta.
+Durante chamadas ao modelo, a CLI mostra `Argos esta pensando...` enquanto aguarda a resposta. O indicador e encerrado antes de qualquer pedido de confirmacao, permitindo responder normalmente com `y`, `yes`, `s` ou `sim`.
+
+No modo interativo, as 10 mensagens anteriores da sessao sao enviadas ao modelo. Isso permite continuar perguntas e instrucoes dependentes de contexto, por exemplo:
+
+```text
+argos: quanto e 2 + 2?
+argos: e 4 + 4?
+```
 
 ## Comandos interativos
 

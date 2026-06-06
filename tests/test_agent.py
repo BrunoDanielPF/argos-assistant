@@ -184,6 +184,29 @@ def test_agent_injects_relevant_long_term_memories_into_context():
     ]
 
 
+def test_agent_injects_previous_conversation_into_planner_context():
+    class ContextPlanner:
+        def __init__(self) -> None:
+            self.contexts = []
+
+        def create_plan(self, user_input: str, context: dict | None = None) -> dict:
+            self.contexts.append(context)
+            answer = "2 + 2 = 4" if len(self.contexts) == 1 else "4 + 4 = 8"
+            return {"mode": "answer", "content": answer}
+
+    planner = ContextPlanner()
+    agent = AssistantAgent(planner=planner, executor=FakeExecutor())
+
+    agent.handle("quanto e 2 + 2?")
+    agent.handle("e 4 + 4?")
+
+    assert planner.contexts[0]["conversation_history"] == []
+    assert planner.contexts[1]["conversation_history"] == [
+        {"role": "user", "content": "quanto e 2 + 2?"},
+        {"role": "assistant", "content": "2 + 2 = 4"},
+    ]
+
+
 def test_agent_executes_confirmed_multi_step_plan():
     class MultiStepPlanner:
         def create_plan(self, user_input: str) -> dict:

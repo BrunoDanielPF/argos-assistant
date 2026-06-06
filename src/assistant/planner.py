@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 import json
 from pathlib import Path
 import re
@@ -20,9 +21,15 @@ CAPABILITY_ALIASES = {
 
 
 class Planner:
-    def __init__(self, llm_client, capabilities: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        llm_client,
+        capabilities: list[str] | None = None,
+        loading_context=None,
+    ) -> None:
         self._llm_client = llm_client
         self._capabilities = capabilities or []
+        self._loading_context = loading_context or nullcontext
 
     def _build_system_prompt(self, context: dict | None = None) -> str:
         context = context or {}
@@ -60,9 +67,20 @@ class Planner:
                 "role": "system",
                 "content": self._build_system_prompt(context=context),
             },
-            {"role": "user", "content": user_input},
         ]
-        response = self._llm_client.chat(messages)
+        conversation_history = (context or {}).get("conversation_history", [])
+        if isinstance(conversation_history, list):
+            for message in conversation_history[-10:]:
+                if not isinstance(message, dict):
+                    continue
+                role = message.get("role")
+                content = message.get("content")
+                if role in {"user", "assistant"} and isinstance(content, str) and content.strip():
+                    messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": user_input})
+
+        with self._loading_context():
+            response = self._llm_client.chat(messages)
         response_text = self._extract_response_text(response)
         parsed = self._parse_response_text(response_text)
         return self._validate_plan_shape(parsed)

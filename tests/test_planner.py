@@ -151,6 +151,52 @@ def test_planner_includes_long_term_memories_in_system_prompt():
     assert "O usuario prefere respostas objetivas em portugues." in system_prompt
 
 
+def test_planner_sends_previous_conversation_to_model():
+    llm_client = FakeOllamaClient()
+    planner = Planner(llm_client=llm_client)
+
+    planner.create_plan(
+        "e 4 + 4?",
+        context={
+            "conversation_history": [
+                {"role": "user", "content": "quanto e 2 + 2?"},
+                {"role": "assistant", "content": "2 + 2 = 4"},
+            ]
+        },
+    )
+
+    assert llm_client.messages[1:] == [
+        {"role": "user", "content": "quanto e 2 + 2?"},
+        {"role": "assistant", "content": "2 + 2 = 4"},
+        {"role": "user", "content": "e 4 + 4?"},
+    ]
+
+
+def test_planner_loading_context_wraps_only_llm_call():
+    events = []
+
+    class LoadingContext:
+        def __enter__(self):
+            events.append("loading-start")
+
+        def __exit__(self, exc_type, exc, traceback):
+            events.append("loading-stop")
+
+    class RecordingClient:
+        def chat(self, messages):
+            events.append("llm-call")
+            return {"response": '{"mode":"answer","content":"ok"}'}
+
+    planner = Planner(
+        llm_client=RecordingClient(),
+        loading_context=lambda: LoadingContext(),
+    )
+
+    planner.create_plan("oi")
+
+    assert events == ["loading-start", "llm-call", "loading-stop"]
+
+
 class FakeAlternateActionClient:
     def chat(self, messages):
         return {

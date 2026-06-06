@@ -75,14 +75,16 @@ class AssistantAgent:
         return message
 
     def handle(self, user_input: str) -> dict:
+        snapshot = self._memory.snapshot()
+        previous_history = snapshot.get("history", [])
         self._memory.add_user_message(user_input)
         planner_params = inspect.signature(self._planner.create_plan).parameters
         if "context" in planner_params:
-            context = self._memory.snapshot().get("context")
+            context = dict(snapshot.get("context") or {})
+            context["conversation_history"] = previous_history[-10:]
             if self._long_term_memory is not None:
                 long_term_memories = self._long_term_memory.search(user_input, max_results=5)
                 if long_term_memories:
-                    context = dict(context or {})
                     context["long_term_memories"] = long_term_memories
             plan = self._planner.create_plan(
                 user_input,

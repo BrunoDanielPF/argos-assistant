@@ -42,7 +42,7 @@ def confirm_action(capability_name: str, arguments: dict) -> bool:
         answer = builtins.input("Execute this action? [y/N]: ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         return False
-    return answer in {"y", "yes"}
+    return answer in {"y", "yes", "s", "sim"}
 
 
 def render_result(result: dict) -> None:
@@ -50,11 +50,6 @@ def render_result(result: dict) -> None:
     console.print(f"[{status}] {result['message']}")
     for suggestion in result["suggestions"]:
         console.print(f"- {suggestion['text']}")
-
-
-def handle_with_loading(agent: AssistantAgent, prompt: str) -> dict:
-    with console.status("Argos esta pensando..."):
-        return agent.handle(prompt)
 
 
 def get_session_memory(agent):
@@ -145,6 +140,7 @@ def build_agent(confirmer=None) -> AssistantAgent:
             },
         ),
         capabilities=capabilities,
+        loading_context=lambda: console.status("Argos esta pensando..."),
     )
     executor = ActionExecutor()
     long_term_memory = LongTermMemoryStore(config.memory_dir)
@@ -186,7 +182,7 @@ def run_interactive_session(
         if prompt.startswith("/open "):
             target_path = prompt[6:].strip()
             resolved_target = resolve_open_target(agent, target_path)
-            result = handle_with_loading(agent, f"open file {resolved_target}")
+            result = agent.handle(f"open file {resolved_target}")
             render_result(result)
             continue
         if prompt.strip() == "/pwd":
@@ -215,7 +211,7 @@ def run_interactive_session(
             continue
         if not prompt.strip():
             continue
-        result = handle_with_loading(agent, prompt)
+        result = agent.handle(prompt)
         render_result(result)
 
 
@@ -230,7 +226,7 @@ def main(ctx: typer.Context) -> None:
 @app.command()
 def chat(prompt: str) -> None:
     agent = build_agent(confirmer=confirm_action)
-    result = handle_with_loading(agent, prompt)
+    result = agent.handle(prompt)
     render_result(result)
 
 

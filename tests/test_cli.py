@@ -28,19 +28,7 @@ def test_cli_chat_command_uses_agent(monkeypatch):
     assert "Ask me to open documentation next" in result.stdout
 
 
-def test_cli_chat_command_wraps_agent_call_in_status(monkeypatch):
-    statuses = []
-
-    class FakeStatus:
-        def __init__(self, message: str) -> None:
-            statuses.append(message)
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, traceback) -> None:
-            return None
-
+def test_cli_chat_command_does_not_wrap_entire_agent_call_in_status(monkeypatch):
     class FakeAgent:
         def handle(self, user_input: str) -> dict:
             return {
@@ -49,14 +37,17 @@ def test_cli_chat_command_wraps_agent_call_in_status(monkeypatch):
                 "suggestions": [{"text": "Ask me for the next step"}],
             }
 
-    monkeypatch.setattr("assistant.cli.console.status", lambda message: FakeStatus(message))
+    def fail_status(message):
+        raise AssertionError("CLI must not keep spinner active around confirmations")
+
+    monkeypatch.setattr("assistant.cli.console.status", fail_status)
     monkeypatch.setattr("assistant.cli.build_agent", lambda confirmer=None: FakeAgent())
 
     runner = CliRunner()
     result = runner.invoke(app, ["chat", "oi"])
 
     assert result.exit_code == 0
-    assert statuses == ["Argos esta pensando..."]
+    assert "Handled" in result.stdout
 
 
 def test_cli_chat_command_shows_failure_status(monkeypatch):
@@ -331,6 +322,17 @@ def test_confirm_action_formats_search_files_summary(monkeypatch):
 
     assert result is True
     assert recorded["message"] == "Execute this action? [y/N]: "
+
+
+def test_confirm_action_accepts_portuguese_yes(monkeypatch):
+    class FakeTtyStdin:
+        def isatty(self) -> bool:
+            return True
+
+    monkeypatch.setattr("assistant.cli.sys.stdin", FakeTtyStdin())
+    monkeypatch.setattr("assistant.cli.builtins.input", lambda message: "sim")
+
+    assert confirm_action("create_file", {"path": "C:\\temp\\hello.md"}) is True
 
 
 def test_confirm_action_returns_false_on_abort(monkeypatch):
