@@ -39,6 +39,41 @@ class AssistantAgent:
             "suggestions": [item.model_dump() for item in suggestions],
         }
 
+    def _execute_action(self, capability_name: str, arguments: dict):
+        policy = self._policy_decider(capability_name)
+
+        if policy == "blocked":
+            return type(
+                "Result",
+                (),
+                {
+                    "ok": False,
+                    "message": f"Blocked capability: {capability_name}",
+                    "data": None,
+                },
+            )()
+
+        if policy == "confirm":
+            confirmed = self._confirmer(capability_name, arguments) if self._confirmer else False
+            if not confirmed:
+                return type(
+                    "Result",
+                    (),
+                    {"ok": False, "message": "Action cancelled by user", "data": None},
+                )()
+
+        return self._executor.execute(capability_name, arguments)
+
+    def _recover_failure_message(self, capability_name: str, arguments: dict, message: str) -> str:
+        if capability_name == "open_file" and message.startswith("File not found:"):
+            path = arguments.get("path")
+            if isinstance(path, str) and path.strip():
+                return (
+                    f"{message}\n"
+                    f"Posso criar esse arquivo em {path} se voce informar o conteudo."
+                )
+        return message
+
     def handle(self, user_input: str) -> dict:
         self._memory.add_user_message(user_input)
         planner_params = inspect.signature(self._planner.create_plan).parameters
@@ -59,33 +94,40 @@ class AssistantAgent:
         if plan["mode"] == "action":
             capability_name = plan["capability"]
             arguments = plan["arguments"]
-            policy = self._policy_decider(capability_name)
-
-            if policy == "blocked":
-                return self._build_response(
-                    ok=False,
-                    message=f"Blocked capability: {capability_name}",
-                    capability_name=capability_name,
-                )
-
-            if policy == "confirm":
-                confirmed = self._confirmer(capability_name, arguments) if self._confirmer else False
-                if not confirmed:
-                    return self._build_response(
-                        ok=False,
-                        message="Action cancelled by user",
-                        capability_name=capability_name,
-                    )
-
-            result = self._executor.execute(capability_name, arguments)
+            result = self._execute_action(capability_name, arguments)
             if capability_name == "search_files" and result.ok and result.data:
                 matches = result.data.get("matches")
                 if isinstance(matches, list):
                     self._memory.set_last_search_results(matches)
             return self._build_response(
                 ok=result.ok,
-                message=result.message,
+                message=self._recover_failure_message(capability_name, arguments, result.message),
                 capability_name=capability_name,
+            )
+
+        if plan["mode"] == "plan":
+            messages = []
+            last_capability = "plan"
+            for step in plan["steps"]:
+                capability_name = step["capability"]
+                arguments = step["arguments"]
+                last_capability = capability_name
+                result = self._execute_action(capability_name, arguments)
+                messages.append(result.message)
+                if not result.ok:
+                    return self._build_response(
+                        ok=False,
+                        message=self._recover_failure_message(
+                            capability_name,
+                            arguments,
+                            "\n".join(messages),
+                        ),
+                        capability_name=capability_name,
+                    )
+            return self._build_response(
+                ok=True,
+                message="\n".join(messages),
+                capability_name=last_capability,
             )
 
         answer = plan["content"]

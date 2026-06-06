@@ -7,3 +7,4 @@ def test_registry_contains_mvp_capabilities():
     assert "open_application" in capability_names
     assert "open_url" in capability_names
     assert "search_files" in capability_names
+    assert "create_file" in capability_names

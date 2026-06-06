@@ -13,6 +13,9 @@ Quando a solicitacao exigir uma acao local suportada, Retorne JSON valido no for
 Quando a solicitacao for uma pergunta ou explicacao, Retorne JSON valido no formato:
 {"mode":"answer","content":"<texto>"}
 
+Quando a solicitacao precisar de varias acoes em sequencia, Retorne JSON valido no formato:
+{"mode":"plan","steps":[{"capability":"<name>","arguments":{...}}]}
+
 Nao invente capabilities.
 Nao execute nem recomende acoes destrutivas sem confirmacao explicita.
 Nao salve ou exponha senhas, tokens, chaves privadas ou dados sensiveis.

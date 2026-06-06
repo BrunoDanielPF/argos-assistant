@@ -24,6 +24,7 @@ def build_default_registry() -> CapabilityRegistry:
     return CapabilityRegistry(
         [
             Capability(name="open_application", description="Open a local application"),
+            Capability(name="create_file", description="Create a local file with content"),
             Capability(name="open_file", description="Open a local file"),
             Capability(name="open_url", description="Open a URL in the browser"),
             Capability(name="search_files", description="Search files in a directory"),

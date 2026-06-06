@@ -18,6 +18,7 @@ class AuditEvent(BaseModel):
 class SessionContext(BaseModel):
     current_cwd: str | None = None
     default_search_root: str | None = None
+    user_home: str | None = None
     last_search_results: list[str] = Field(default_factory=list)
 
 

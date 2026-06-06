@@ -24,11 +24,14 @@ class SessionMemory:
         self,
         current_cwd: str | None = None,
         default_search_root: str | None = None,
+        user_home: str | None = None,
     ) -> None:
         if current_cwd is not None:
             self._context.current_cwd = current_cwd
         if default_search_root is not None:
             self._context.default_search_root = default_search_root
+        if user_home is not None:
+            self._context.user_home = user_home
 
     def set_last_search_results(self, results: list[str]) -> None:
         self._context.last_search_results = list(results)

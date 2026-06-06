@@ -156,6 +156,28 @@ def test_cli_interactive_updates_cwd(monkeypatch):
     ]
 
 
+def test_build_agent_sets_user_home_context(monkeypatch):
+    class FakePlanner:
+        def __init__(self, *args, **kwargs) -> None:
+            return None
+
+    class FakeOllamaClient:
+        def __init__(self, *args, **kwargs) -> None:
+            return None
+
+    monkeypatch.setattr("assistant.cli.Planner", FakePlanner)
+    monkeypatch.setattr("assistant.cli.OllamaClient", FakeOllamaClient)
+    monkeypatch.setattr("assistant.cli.ActionExecutor", lambda: object())
+
+    from assistant.cli import build_agent
+
+    agent = build_agent()
+    context = agent.memory.snapshot()["context"]
+
+    assert "user_home" in context
+    assert context["user_home"]
+
+
 def test_cli_interactive_shows_pwd_and_context(monkeypatch):
     class FakeMemory:
         def snapshot(self) -> dict:

@@ -48,6 +48,7 @@ def test_session_memory_updates_context_fields():
     assert snapshot["context"] == {
         "current_cwd": "C:\\one",
         "default_search_root": "C:\\two",
+        "user_home": None,
         "last_search_results": [],
     }
 

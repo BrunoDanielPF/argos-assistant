@@ -182,3 +182,78 @@ def test_agent_injects_relevant_long_term_memories_into_context():
             "source_file": "correcoes.md",
         }
     ]
+
+
+def test_agent_executes_confirmed_multi_step_plan():
+    class MultiStepPlanner:
+        def create_plan(self, user_input: str) -> dict:
+            return {
+                "mode": "plan",
+                "steps": [
+                    {
+                        "capability": "create_file",
+                        "arguments": {"path": "C:\\Users\\frand\\hello_world.md", "content": "hello world"},
+                    },
+                    {
+                        "capability": "open_file",
+                        "arguments": {"path": "C:\\Users\\frand\\hello_world.md"},
+                    },
+                ],
+            }
+
+    executed = []
+
+    class RecordingExecutor:
+        def execute(self, capability_name: str, args: dict):
+            executed.append((capability_name, args))
+            return type("Result", (), {"ok": True, "message": f"Executed {capability_name}", "data": None})()
+
+    confirmations = []
+
+    def confirm(capability_name: str, arguments: dict) -> bool:
+        confirmations.append((capability_name, arguments))
+        return True
+
+    agent = AssistantAgent(
+        planner=MultiStepPlanner(),
+        executor=RecordingExecutor(),
+        confirmer=confirm,
+    )
+
+    response = agent.handle("crie arquivo")
+
+    assert response["ok"] is True
+    assert "Executed create_file" in response["message"]
+    assert "Executed open_file" in response["message"]
+    assert [item[0] for item in executed] == ["create_file", "open_file"]
+    assert [item[0] for item in confirmations] == ["create_file"]
+
+
+def test_agent_suggests_file_creation_when_open_file_fails_missing():
+    class MissingFilePlanner:
+        def create_plan(self, user_input: str) -> dict:
+            return {
+                "mode": "action",
+                "capability": "open_file",
+                "arguments": {"path": "C:\\Users\\frand\\hello_world.md"},
+            }
+
+    class MissingFileExecutor:
+        def execute(self, capability_name: str, args: dict):
+            return type(
+                "Result",
+                (),
+                {
+                    "ok": False,
+                    "message": "File not found: C:\\Users\\frand\\hello_world.md",
+                    "data": None,
+                },
+            )()
+
+    agent = AssistantAgent(planner=MissingFilePlanner(), executor=MissingFileExecutor())
+
+    response = agent.handle("abra arquivo")
+
+    assert response["ok"] is False
+    assert "File not found" in response["message"]
+    assert "Posso criar esse arquivo" in response["message"]

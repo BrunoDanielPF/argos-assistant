@@ -11,4 +11,6 @@ def test_argos_modelfile_customizes_qwen3_4b():
     assert "Voce e Argos" in content
     assert "Responda em portugues por padrao" in content
     assert "Retorne JSON valido" in content
+    assert '"mode":"plan"' in content
+    assert "steps" in content
     assert "PARAMETER temperature 0.2" in content

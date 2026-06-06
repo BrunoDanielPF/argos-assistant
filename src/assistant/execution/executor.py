@@ -66,6 +66,23 @@ class ActionExecutor:
             self._open_file(str(file_path))
             return ExecutionResult(ok=True, message=f"Opened file {file_path}")
 
+        if capability_name == "create_file":
+            path = args.get("path")
+            content = args.get("content", "")
+            if not isinstance(path, str) or not path.strip():
+                return ExecutionResult(ok=False, message="Missing path for create_file")
+            if not isinstance(content, str):
+                return ExecutionResult(ok=False, message="Invalid content for create_file")
+
+            file_path = Path(path)
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_text(content, encoding="utf-8")
+            return ExecutionResult(
+                ok=True,
+                message=f"Created file {file_path}",
+                data={"path": str(file_path)},
+            )
+
         if capability_name == "search_files":
             root = Path(args["root"])
             pattern = args["pattern"]

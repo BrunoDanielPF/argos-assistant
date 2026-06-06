@@ -65,6 +65,33 @@ def test_executor_reports_missing_file_for_open_file(tmp_path):
     assert "File not found" in result.message
 
 
+def test_executor_creates_file_with_content(tmp_path):
+    target = tmp_path / "hello_world.md"
+    executor = ActionExecutor(open_file_fn=lambda path: None)
+
+    result = executor.execute(
+        "create_file",
+        {"path": str(target), "content": "hello world"},
+    )
+
+    assert result.ok is True
+    assert target.read_text(encoding="utf-8") == "hello world"
+    assert "Created file" in result.message
+
+
+def test_executor_create_file_creates_parent_directories(tmp_path):
+    target = tmp_path / "docs" / "hello_world.md"
+    executor = ActionExecutor(open_file_fn=lambda path: None)
+
+    result = executor.execute(
+        "create_file",
+        {"path": str(target), "content": "hello world"},
+    )
+
+    assert result.ok is True
+    assert target.exists()
+
+
 def test_executor_searches_files(monkeypatch, tmp_path):
     target = tmp_path / "notes.txt"
     target.write_text("hello", encoding="utf-8")

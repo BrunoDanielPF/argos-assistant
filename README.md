@@ -30,12 +30,14 @@ O MVP atual entrega:
 - abertura de URLs
 - abertura de aplicativos conhecidos
 - abertura de arquivos
+- criacao segura de arquivos com confirmacao
 - busca de arquivos com confirmacao
 - abertura de resultado por indice no modo interativo
 - memoria curta de sessao
 - primeira versao de memoria persistente em Markdown
 - recuperacao de memorias persistentes relevantes antes do planejamento
 - catalogo local de capabilities
+- planos multi-etapa simples para criar arquivo e abrir em seguida
 - politicas `allow`, `confirm` e `blocked`
 - loader de skills locais
 - adaptador MCP minimo
@@ -196,6 +198,7 @@ Exemplos no modo interativo:
 ```text
 argos: oi
 argos: open calculator
+argos: vamos criar um markdown na pasta do meu usuario, esse arquivo markdown precisa ter hello world escrito
 argos: find README.md
 argos: /open 1
 argos: exit
@@ -257,7 +260,7 @@ Argos separa raciocinio de execucao. O modelo local e o planner podem propor aco
 Classes de politica:
 
 - `allow`: acoes simples, como abrir URL, aplicativo conhecido ou arquivo
-- `confirm`: acoes sensiveis, como busca de arquivos ou futuras operacoes shell
+- `confirm`: acoes sensiveis, como criar arquivo, busca de arquivos ou futuras operacoes shell
 - `blocked`: acoes destrutivas ou nao suportadas
 
 Skills, MCPs e prompts internos nao devem executar diretamente acoes na maquina. Qualquer acao local deve passar pelo mesmo fluxo de politica e confirmacao.
@@ -280,6 +283,26 @@ Smoke test manual:
 
 ```bash
 argos chat "open ollama website"
+```
+
+Teste manual de criacao segura de arquivo:
+
+```bash
+argos
+```
+
+No modo interativo:
+
+```text
+argos: vamos criar um markdown na pasta do meu usuario, esse arquivo markdown precisa ter hello world escrito
+Execute this action? [y/N]: y
+argos: exit
+```
+
+O arquivo esperado e:
+
+```powershell
+Get-Content "$env:USERPROFILE\hello_world.md"
 ```
 
 Teste manual de memoria:
@@ -338,6 +361,8 @@ Quando a solicitacao exigir uma acao local suportada, Retorne JSON valido no for
 {"mode":"action","capability":"<name>","arguments":{...}}
 Quando a solicitacao for uma pergunta ou explicacao, Retorne JSON valido no formato:
 {"mode":"answer","content":"<texto>"}
+Quando a solicitacao precisar de varias acoes em sequencia, Retorne JSON valido no formato:
+{"mode":"plan","steps":[{"capability":"<name>","arguments":{...}}]}
 Nao invente capabilities.
 Nao execute nem recomende acoes destrutivas sem confirmacao explicita.
 Nao salve ou exponha senhas, tokens, chaves privadas ou dados sensiveis.

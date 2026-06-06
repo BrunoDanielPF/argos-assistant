@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 import re
 
 
@@ -29,6 +30,7 @@ class Planner:
             "You are Argos. "
             "Return only JSON. "
             'For executable requests, use {"mode":"action","capability":"<name>","arguments":{...}}. '
+            'For multi-step executable requests, use {"mode":"plan","steps":[{"capability":"<name>","arguments":{...}}]}. '
             'For direct answers, use {"mode":"answer","content":"<text>"}. '
             "Requests to open websites, search files, open applications, or run supported actions must use mode=action."
         )
@@ -69,6 +71,14 @@ class Planner:
         normalized_input = user_input.strip()
         lowered_input = normalized_input.lower()
         context = context or {}
+
+        create_markdown_plan = self._heuristic_create_markdown_plan(
+            normalized_input,
+            lowered_input,
+            context,
+        )
+        if create_markdown_plan is not None:
+            return create_markdown_plan
 
         if lowered_input.startswith("open http://") or lowered_input.startswith("open https://"):
             return {
@@ -137,6 +147,65 @@ class Planner:
                 }
 
         return None
+
+    def _heuristic_create_markdown_plan(
+        self,
+        normalized_input: str,
+        lowered_input: str,
+        context: dict,
+    ) -> dict | None:
+        wants_create = any(term in lowered_input for term in ("criar", "crie", "create"))
+        wants_markdown = any(term in lowered_input for term in ("markdown", "marquidown", ".md"))
+        if not wants_create or not wants_markdown:
+            return None
+
+        content = self._extract_requested_content(normalized_input)
+        if not content:
+            return None
+
+        user_home = context.get("user_home") or str(Path.home())
+        target_name = self._extract_markdown_filename(lowered_input, content)
+        target_path = Path(str(user_home)) / target_name
+        return {
+            "mode": "plan",
+            "steps": [
+                {
+                    "capability": "create_file",
+                    "arguments": {"path": str(target_path), "content": content},
+                },
+                {
+                    "capability": "open_file",
+                    "arguments": {"path": str(target_path)},
+                },
+            ],
+        }
+
+    def _extract_requested_content(self, user_input: str) -> str | None:
+        lowered = user_input.lower()
+        hello_match = re.search(r"\bhello\s+world\b", lowered)
+        if hello_match:
+            return "hello world"
+
+        quoted_match = re.search(r'"([^"]+)"', user_input)
+        if quoted_match:
+            return quoted_match.group(1).strip()
+
+        written_match = re.search(
+            r"(?:ter|com|escrito|conteudo|conteúdo)\s+(.+?)(?:\s+escrito|\s+no arquivo|$)",
+            user_input,
+            flags=re.IGNORECASE,
+        )
+        if written_match:
+            return written_match.group(1).strip(" .")
+        return None
+
+    def _extract_markdown_filename(self, lowered_input: str, content: str) -> str:
+        explicit_name_match = re.search(r"([\w-]+\.md)", lowered_input)
+        if explicit_name_match:
+            return explicit_name_match.group(1)
+
+        slug = re.sub(r"[^a-zA-Z0-9]+", "_", content.lower()).strip("_")
+        return f"{slug or 'documento'}.md"
 
     def _extract_response_text(self, response: dict) -> str:
         if not isinstance(response, dict):
@@ -211,5 +280,28 @@ class Planner:
                 "mode": "answer",
                 "content": content,
             }
+
+        if mode == "plan":
+            steps = plan.get("steps")
+            if not isinstance(steps, list) or not steps:
+                raise PlannerError("Planner plan response is missing required non-empty list field 'steps'")
+
+            validated_steps = []
+            for index, step in enumerate(steps):
+                if not isinstance(step, dict):
+                    raise PlannerError(f"Planner plan step {index} must be an object")
+                capability = step.get("capability")
+                arguments = step.get("arguments")
+                if not isinstance(capability, str):
+                    raise PlannerError(f"Planner plan step {index} is missing string field 'capability'")
+                if not isinstance(arguments, dict):
+                    raise PlannerError(f"Planner plan step {index} is missing dict field 'arguments'")
+                validated_steps.append(
+                    {
+                        "capability": CAPABILITY_ALIASES.get(capability, capability),
+                        "arguments": arguments,
+                    }
+                )
+            return {"mode": "plan", "steps": validated_steps}
 
         raise PlannerError(f"Planner response has unsupported mode {mode!r}")

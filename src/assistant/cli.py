@@ -1,5 +1,6 @@
 import builtins
 import os
+from pathlib import Path
 import sys
 
 import typer
@@ -129,6 +130,7 @@ def build_agent(confirmer=None) -> AssistantAgent:
     memory.set_context(
         current_cwd=os.getcwd(),
         default_search_root=os.getcwd(),
+        user_home=str(Path.home()),
     )
     planner = Planner(
         OllamaClient(

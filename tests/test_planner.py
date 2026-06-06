@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 
 from assistant.planner import Planner, PlannerError
 
@@ -105,6 +106,29 @@ def test_planner_uses_context_for_find_without_explicit_path():
     }
 
 
+def test_planner_creates_markdown_in_user_home_from_portuguese_request(tmp_path):
+    planner = Planner(llm_client=FailIfCalledClient())
+    plan = planner.create_plan(
+        "vamos criar um markdown na pasta do meu usuario, esse arquivo markdown precisa ter hello world escrito",
+        context={"user_home": str(tmp_path)},
+    )
+
+    expected_path = Path(tmp_path) / "hello_world.md"
+    assert plan == {
+        "mode": "plan",
+        "steps": [
+            {
+                "capability": "create_file",
+                "arguments": {"path": str(expected_path), "content": "hello world"},
+            },
+            {
+                "capability": "open_file",
+                "arguments": {"path": str(expected_path)},
+            },
+        ],
+    }
+
+
 def test_planner_includes_long_term_memories_in_system_prompt():
     llm_client = FakeOllamaClient()
     planner = Planner(llm_client=llm_client)
@@ -142,6 +166,37 @@ def test_planner_normalizes_alternate_action_shape():
         "mode": "action",
         "capability": "open_url",
         "arguments": {"url": "https://ollama.com"},
+    }
+
+
+class FakePlanClient:
+    def chat(self, messages):
+        return {
+            "response": (
+                '{"mode":"plan","steps":['
+                '{"capability":"create_file","arguments":{"path":"C:\\\\Users\\\\frand\\\\hello.md","content":"hello world"}},'
+                '{"capability":"open_file","arguments":{"path":"C:\\\\Users\\\\frand\\\\hello.md"}}'
+                ']}'
+            )
+        }
+
+
+def test_planner_accepts_structured_multi_step_plan():
+    planner = Planner(llm_client=FakePlanClient())
+    plan = planner.create_plan("crie um markdown")
+
+    assert plan == {
+        "mode": "plan",
+        "steps": [
+            {
+                "capability": "create_file",
+                "arguments": {"path": "C:\\Users\\frand\\hello.md", "content": "hello world"},
+            },
+            {
+                "capability": "open_file",
+                "arguments": {"path": "C:\\Users\\frand\\hello.md"},
+            },
+        ],
     }
 
 
