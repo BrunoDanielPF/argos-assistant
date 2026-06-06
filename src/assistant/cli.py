@@ -10,6 +10,7 @@ from assistant.capabilities.registry import build_default_registry
 from assistant.config import AppConfig
 from assistant.execution.executor import ActionExecutor
 from assistant.llm.ollama_client import OllamaClient
+from assistant.memory.long_term import LongTermMemoryStore
 from assistant.memory.session import SessionMemory
 from assistant.planner import Planner
 
@@ -65,6 +66,44 @@ def resolve_open_target(agent, target: str) -> str:
     return target
 
 
+def extract_memory_learning(prompt: str) -> str | None:
+    normalized = prompt.strip()
+    lowered = normalized.lower()
+    prefixes = ("lembre que ", "aprenda que ", "remember that ")
+    for prefix in prefixes:
+        if lowered.startswith(prefix):
+            return normalized[len(prefix):].strip()
+    if lowered.startswith("corrigindo:"):
+        return normalized.split(":", 1)[1].strip()
+    return None
+
+
+def confirm_memory(learning: str, target: str) -> bool:
+    console.print("Memory save requested.")
+    console.print(f"Learning: {learning}")
+    console.print(f"Target: {target}")
+    try:
+        answer = builtins.input("Save this memory? [y/N]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    return answer in {"y", "yes", "s", "sim"}
+
+
+def remember_learning(memory_store: LongTermMemoryStore, learning: str) -> None:
+    validation = memory_store.validate_learning(learning)
+    if not validation.ok:
+        console.print(f"[ERROR] Memory not saved: {validation.reason}")
+        return
+
+    target = memory_store.memory_dir / "correcoes.md"
+    if not confirm_memory(learning, str(target)):
+        console.print("[ERROR] Memory save cancelled by user")
+        return
+
+    saved_path = memory_store.remember(learning)
+    console.print(f"[OK] Memory saved to {saved_path}")
+
+
 def build_agent(confirmer=None) -> AssistantAgent:
     config = AppConfig()
     capabilities = [item.name for item in build_default_registry().list_all()]
@@ -90,7 +129,11 @@ def build_agent(confirmer=None) -> AssistantAgent:
     )
 
 
-def run_interactive_session(agent: AssistantAgent) -> None:
+def run_interactive_session(
+    agent: AssistantAgent,
+    memory_store: LongTermMemoryStore | None = None,
+) -> None:
+    memory_store = memory_store or LongTermMemoryStore(AppConfig().memory_dir)
     console.print("Interactive mode. Type 'exit' to quit.")
 
     while True:
@@ -107,6 +150,10 @@ def run_interactive_session(agent: AssistantAgent) -> None:
                     default_search_root=new_cwd,
                 )
             console.print(f"Updated session cwd to {new_cwd}")
+            continue
+        if prompt.startswith("/remember "):
+            learning = prompt[10:].strip()
+            remember_learning(memory_store, learning)
             continue
         if prompt.startswith("/open "):
             target_path = prompt[6:].strip()
@@ -130,6 +177,10 @@ def run_interactive_session(agent: AssistantAgent) -> None:
             snapshot = session_memory.snapshot() if session_memory is not None else {}
             for item in snapshot.get("history", []):
                 console.print(f"{item['role']}: {item['content']}")
+            continue
+        learning = extract_memory_learning(prompt)
+        if learning:
+            remember_learning(memory_store, learning)
             continue
         if not prompt.strip():
             continue

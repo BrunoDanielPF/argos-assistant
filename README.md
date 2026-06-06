@@ -33,6 +33,7 @@ O MVP atual entrega:
 - busca de arquivos com confirmacao
 - abertura de resultado por indice no modo interativo
 - memoria curta de sessao
+- primeira versao de memoria persistente em Markdown
 - catalogo local de capabilities
 - politicas `allow`, `confirm` e `blocked`
 - loader de skills locais
@@ -73,6 +74,14 @@ Regras:
 - registrar aprendizados pequenos, objetivos e verificaveis
 - recuperar memorias relevantes semanticamente antes de planejar respostas ou acoes
 - manter o usuario capaz de ler, editar e apagar as memorias manualmente
+
+Implementacao atual:
+
+- comando interativo `/remember <aprendizado>`
+- atalhos em linguagem natural: `lembre que ...`, `aprenda que ...` e `corrigindo: ...`
+- confirmacao antes de salvar
+- escrita em `%USERPROFILE%\.argos\memory\correcoes.md`
+- bloqueio simples para conteudo sensivel como senha, token, secret ou chave privada
 
 ## Roadmap
 
@@ -164,6 +173,7 @@ O comando `assistant` ainda existe como alias de compatibilidade, mas o nome ofi
 - `/history`: mostra o historico da sessao
 - `/open <path>`: abre um arquivo pelo caminho
 - `/open <indice>`: abre um item da ultima busca por indice
+- `/remember <aprendizado>`: salva um aprendizado confirmado na memoria persistente
 - `exit` ou `quit`: encerra a sessao
 
 ## Skills do projeto
@@ -220,6 +230,26 @@ Smoke test manual:
 
 ```bash
 argos chat "open ollama website"
+```
+
+Teste manual de memoria:
+
+```bash
+argos
+```
+
+No modo interativo:
+
+```text
+argos: lembre que eu prefiro respostas objetivas em portugues
+Save this memory? [y/N]: y
+argos: exit
+```
+
+Depois confira o arquivo:
+
+```powershell
+Get-Content "$env:USERPROFILE\.argos\memory\correcoes.md"
 ```
 
 ## Ollama
