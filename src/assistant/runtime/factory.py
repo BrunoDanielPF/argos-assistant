@@ -47,10 +47,11 @@ class RuntimeFactory:
             item.name for item in build_default_registry(tool_catalog).list_all()
         ]
         session_memory = memory or SessionMemory()
+        context = session_memory.snapshot()["context"]
         session_memory.set_context(
-            current_cwd=os.getcwd(),
-            default_search_root=os.getcwd(),
-            user_home=str(Path.home()),
+            current_cwd=context.get("current_cwd") or os.getcwd(),
+            default_search_root=context.get("default_search_root") or os.getcwd(),
+            user_home=context.get("user_home") or str(Path.home()),
         )
         planner = Planner(
             OllamaClient(

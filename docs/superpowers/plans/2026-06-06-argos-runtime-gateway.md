@@ -333,6 +333,8 @@ git commit -m "refactor: centralize Argos runtime construction"
 
 ## Task 5: repositorio persistente de sessoes
 
+**Status:** Concluida no commit de persistencia e API do gateway.
+
 **Files:**
 - Create: `src/assistant/sessions/__init__.py`
 - Create: `src/assistant/sessions/repository.py`
@@ -389,6 +391,8 @@ git commit -m "feat: persist Argos sessions in SQLite"
 ```
 
 ## Task 6: autenticacao local do gateway
+
+**Status:** Concluida no commit de persistencia e API do gateway.
 
 **Files:**
 - Modify: `pyproject.toml`
@@ -447,6 +451,8 @@ git commit -m "feat: add local gateway authentication"
 
 ## Task 7: servico de sessoes do gateway
 
+**Status:** Concluida no commit de persistencia e API do gateway.
+
 **Files:**
 - Create: `src/assistant/gateway/service.py`
 - Test: `tests/gateway/test_service.py`
@@ -498,6 +504,8 @@ git commit -m "feat: add persistent gateway session service"
 ```
 
 ## Task 8: API local
+
+**Status:** Concluida no commit de persistencia e API do gateway.
 
 **Files:**
 - Create: `src/assistant/gateway/app.py`

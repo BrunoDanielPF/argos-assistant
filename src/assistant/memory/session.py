@@ -8,6 +8,23 @@ class SessionMemory:
         self._suggestions: list[Suggestion] = []
         self._context = SessionContext()
 
+    @classmethod
+    def from_snapshot(cls, snapshot: dict) -> "SessionMemory":
+        validated = SessionSnapshot.model_validate(snapshot)
+        memory = cls()
+        memory._history = [
+            message.model_copy(deep=True) for message in validated.history
+        ]
+        memory._audit = [
+            event.model_copy(deep=True) for event in validated.audit
+        ]
+        memory._suggestions = [
+            suggestion.model_copy(deep=True)
+            for suggestion in validated.suggestions
+        ]
+        memory._context = validated.context.model_copy(deep=True)
+        return memory
+
     def add_user_message(self, content: str) -> None:
         self._history.append(ChatMessage(role="user", content=content))
 

@@ -45,3 +45,50 @@ def test_factory_builds_agent_with_provided_memory(monkeypatch, tmp_path):
     agent = RuntimeFactory(config=config).build_agent(memory=memory)
 
     assert agent.memory is memory
+
+
+def test_factory_preserves_restored_session_context(monkeypatch, tmp_path):
+    class FakeCatalog:
+        def list_enabled(self):
+            return []
+
+        def get_enabled(self, capability):
+            return None
+
+    class FakeRegistry:
+        def list_all(self):
+            return []
+
+    class FakeExecutor:
+        def configure_tools(self, catalog, runner):
+            pass
+
+    monkeypatch.setattr(
+        "assistant.runtime.factory.RuntimeFactory.build_tool_catalog",
+        lambda self: FakeCatalog(),
+    )
+    monkeypatch.setattr(
+        "assistant.runtime.factory.build_default_registry",
+        lambda catalog: FakeRegistry(),
+    )
+    monkeypatch.setattr("assistant.runtime.factory.OllamaClient", lambda **kwargs: object())
+    monkeypatch.setattr(
+        "assistant.runtime.factory.Planner",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr("assistant.runtime.factory.ActionExecutor", FakeExecutor)
+
+    memory = SessionMemory()
+    memory.set_context(
+        current_cwd="C:\\restored",
+        default_search_root="C:\\restored",
+        user_home="C:\\Users\\restored",
+    )
+    config = AppConfig(
+        memory_dir=tmp_path / "memory",
+        tool_audit_file=tmp_path / "audit.jsonl",
+    )
+
+    agent = RuntimeFactory(config=config).build_agent(memory=memory)
+
+    assert agent.memory.snapshot()["context"]["current_cwd"] == "C:\\restored"
