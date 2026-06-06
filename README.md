@@ -43,19 +43,27 @@ O MVP atual entrega:
 
 ## Estrategia de modelo
 
-O padrao do Argos deve priorizar eficiencia, baixa latencia e uso local confortavel. Por isso, o modelo operacional padrao e menor, atualmente `qwen3:4b`.
+O padrao do Argos deve priorizar eficiencia, baixa latencia e uso local confortavel. Por isso, o modelo operacional padrao e um modelo customizado no Ollama, atualmente `argos-qwen3:4b`, criado em cima de `qwen3:4b`.
 
 Diretrizes:
 
 - usar modelo pequeno para comandos, planejamento simples, CLI e automacao local
+- manter persona e regras estaveis no `Modelfile`
 - reservar modelos maiores para tarefas mais complexas, benchmark ou fallback configuravel
 - manter o modelo configuravel para permitir troca conforme hardware e qualidade desejada
 - medir qualidade por planejamento correto, JSON valido, latencia e consumo de recursos
 
 Modelo recomendado para o MVP:
 
-- padrao: `qwen3:4b`
+- padrao: `argos-qwen3:4b`
+- base do modelo customizado: `qwen3:4b`
 - alternativa mais forte: `qwen3:8b`
+
+Camadas de customizacao:
+
+- `Modelfile`: persona, idioma, formato JSON, parametros e regras estaveis
+- memoria Markdown: preferencias, correcoes e aprendizados que mudam com o tempo
+- LoRA/QLoRA futuro: padroes estaveis de tool-use, planejamento e estilo apos coleta de dataset
 
 ## Memoria progressiva
 
@@ -154,7 +162,8 @@ entrada CLI/voz/hotkey
 
 - Python 3.12
 - Ollama rodando localmente
-- um modelo local, por exemplo `qwen3:4b`
+- modelo base `qwen3:4b`
+- modelo customizado `argos-qwen3:4b`
 
 ## Setup
 
@@ -163,6 +172,7 @@ python -m venv .venv
 .venv\Scripts\activate
 pip install -e .[dev]
 ollama pull qwen3:4b
+ollama create argos-qwen3:4b -f models/argos-qwen3-4b.Modelfile
 ```
 
 ## Uso
@@ -296,6 +306,7 @@ Se o comando `ollama` estiver disponivel:
 ```bash
 ollama list
 ollama pull qwen3:4b
+ollama create argos-qwen3:4b -f models/argos-qwen3-4b.Modelfile
 ```
 
 Se o daemon estiver ativo em `http://localhost:11434`, mas o comando `ollama` nao estiver no `PATH`, o modelo pode ser baixado pela API local:
@@ -303,6 +314,32 @@ Se o daemon estiver ativo em `http://localhost:11434`, mas o comando `ollama` na
 ```powershell
 $body = @{ name = 'qwen3:4b'; stream = $false } | ConvertTo-Json
 Invoke-RestMethod -Uri 'http://localhost:11434/api/pull' -Method Post -ContentType 'application/json' -Body $body
+```
+
+Depois crie o modelo customizado usando o `Modelfile` versionado:
+
+```powershell
+$system = @'
+Voce e Argos, um assistente pessoal local offline-first para Windows.
+Responda em portugues por padrao.
+Seja objetivo, pratico e direto.
+Use memorias persistentes fornecidas no contexto como preferencias do usuario.
+Quando a solicitacao exigir uma acao local suportada, Retorne JSON valido no formato:
+{"mode":"action","capability":"<name>","arguments":{...}}
+Quando a solicitacao for uma pergunta ou explicacao, Retorne JSON valido no formato:
+{"mode":"answer","content":"<texto>"}
+Nao invente capabilities.
+Nao execute nem recomende acoes destrutivas sem confirmacao explicita.
+Nao salve ou exponha senhas, tokens, chaves privadas ou dados sensiveis.
+'@
+$body = @{
+  model = 'argos-qwen3:4b'
+  from = 'qwen3:4b'
+  system = $system
+  parameters = @{ temperature = 0.2; top_p = 0.9 }
+  stream = $false
+} | ConvertTo-Json -Depth 5
+Invoke-RestMethod -Uri 'http://localhost:11434/api/create' -Method Post -ContentType 'application/json' -Body $body
 ```
 
 ## Troubleshooting
