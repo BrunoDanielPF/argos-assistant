@@ -21,11 +21,60 @@ def test_cli_chat_command_uses_agent(monkeypatch):
     monkeypatch.setattr("assistant.cli.build_agent", lambda confirmer=None: FakeAgent())
 
     runner = CliRunner()
-    result = runner.invoke(app, ["chat", "open ollama website"])
+    result = runner.invoke(app, ["chat", "--direct", "open ollama website"])
 
     assert result.exit_code == 0
     assert "Opened https://ollama.com" in result.stdout
     assert "Ask me to open documentation next" in result.stdout
+
+
+def test_cli_chat_uses_gateway_by_default(monkeypatch):
+    calls = []
+
+    class FakeGatewayClient:
+        def chat(self, session_id, content, cwd=None):
+            calls.append((session_id, content, cwd))
+            return type(
+                "Response",
+                (),
+                {
+                    "ok": True,
+                    "message": "Gateway handled",
+                    "suggestions": [],
+                },
+            )()
+
+    monkeypatch.setattr(
+        "assistant.cli.build_gateway_client",
+        lambda: FakeGatewayClient(),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        ["chat", "--session", "projeto-x", "continue"],
+    )
+
+    assert result.exit_code == 0
+    assert calls == [("projeto-x", "continue", None)]
+    assert "Gateway handled" in result.stdout
+
+
+def test_cli_gateway_unavailable_does_not_fallback_silently(monkeypatch):
+    from assistant.gateway.client import GatewayUnavailable
+
+    class FakeGatewayClient:
+        def chat(self, session_id, content, cwd=None):
+            raise GatewayUnavailable("offline")
+
+    monkeypatch.setattr(
+        "assistant.cli.build_gateway_client",
+        lambda: FakeGatewayClient(),
+    )
+
+    result = CliRunner().invoke(app, ["chat", "oi"])
+
+    assert result.exit_code == 1
+    assert "argos start" in result.stdout
 
 
 def test_cli_chat_command_does_not_wrap_entire_agent_call_in_status(monkeypatch):
@@ -44,7 +93,7 @@ def test_cli_chat_command_does_not_wrap_entire_agent_call_in_status(monkeypatch)
     monkeypatch.setattr("assistant.cli.build_agent", lambda confirmer=None: FakeAgent())
 
     runner = CliRunner()
-    result = runner.invoke(app, ["chat", "oi"])
+    result = runner.invoke(app, ["chat", "--direct", "oi"])
 
     assert result.exit_code == 0
     assert "Handled" in result.stdout
@@ -62,7 +111,7 @@ def test_cli_chat_command_shows_failure_status(monkeypatch):
     monkeypatch.setattr("assistant.cli.build_agent", lambda confirmer=None: FakeAgent())
 
     runner = CliRunner()
-    result = runner.invoke(app, ["chat", "search notes"])
+    result = runner.invoke(app, ["chat", "--direct", "search notes"])
 
     assert result.exit_code == 0
     assert "Action cancelled by user" in result.stdout
@@ -84,7 +133,11 @@ def test_cli_interactive_runs_until_exit(monkeypatch):
     monkeypatch.setattr("assistant.cli.build_agent", lambda confirmer=None: FakeAgent())
 
     runner = CliRunner()
-    result = runner.invoke(app, ["interactive"], input="open ollama website\nexit\n")
+    result = runner.invoke(
+        app,
+        ["interactive", "--direct"],
+        input="open ollama website\nexit\n",
+    )
 
     assert result.exit_code == 0
     assert "Handled open ollama website" in result.stdout
@@ -106,7 +159,7 @@ def test_cli_without_subcommand_enters_interactive_mode(monkeypatch):
     monkeypatch.setattr("assistant.cli.build_agent", lambda confirmer=None: FakeAgent())
 
     runner = CliRunner()
-    result = runner.invoke(app, input="oi\nexit\n")
+    result = runner.invoke(app, ["--direct"], input="oi\nexit\n")
 
     assert result.exit_code == 0
     assert "Interactive mode. Type 'exit' to quit." in result.stdout
@@ -139,7 +192,11 @@ def test_cli_interactive_updates_cwd(monkeypatch):
     monkeypatch.setattr("assistant.cli.build_agent", lambda confirmer=None: FakeAgent())
 
     runner = CliRunner()
-    result = runner.invoke(app, ["interactive"], input="/cwd C:\\temp\nexit\n")
+    result = runner.invoke(
+        app,
+        ["interactive", "--direct"],
+        input="/cwd C:\\temp\nexit\n",
+    )
 
     assert result.exit_code == 0
     assert fake_memory.context_updates == [
@@ -184,7 +241,11 @@ def test_cli_interactive_shows_pwd_and_context(monkeypatch):
     monkeypatch.setattr("assistant.cli.build_agent", lambda confirmer=None: FakeAgent())
 
     runner = CliRunner()
-    result = runner.invoke(app, ["interactive"], input="/pwd\n/context\nexit\n")
+    result = runner.invoke(
+        app,
+        ["interactive", "--direct"],
+        input="/pwd\n/context\nexit\n",
+    )
 
     assert result.exit_code == 0
     assert "C:\\workspace" in result.stdout
@@ -221,7 +282,11 @@ def test_cli_interactive_shows_history(monkeypatch):
     monkeypatch.setattr("assistant.cli.build_agent", lambda confirmer=None: FakeAgent())
 
     runner = CliRunner()
-    result = runner.invoke(app, ["interactive"], input="/history\nexit\n")
+    result = runner.invoke(
+        app,
+        ["interactive", "--direct"],
+        input="/history\nexit\n",
+    )
 
     assert result.exit_code == 0
     assert "open calculator" in result.stdout
@@ -246,7 +311,11 @@ def test_cli_interactive_opens_explicit_file(monkeypatch):
     monkeypatch.setattr("assistant.cli.build_agent", lambda confirmer=None: FakeAgent())
 
     runner = CliRunner()
-    result = runner.invoke(app, ["interactive"], input="/open C:\\temp\\notes.txt\nexit\n")
+    result = runner.invoke(
+        app,
+        ["interactive", "--direct"],
+        input="/open C:\\temp\\notes.txt\nexit\n",
+    )
 
     assert result.exit_code == 0
     assert handled == ["open file C:\\temp\\notes.txt"]
@@ -283,7 +352,11 @@ def test_cli_interactive_opens_search_result_by_index(monkeypatch):
     monkeypatch.setattr("assistant.cli.build_agent", lambda confirmer=None: FakeAgent())
 
     runner = CliRunner()
-    result = runner.invoke(app, ["interactive"], input="/open 1\nexit\n")
+    result = runner.invoke(
+        app,
+        ["interactive", "--direct"],
+        input="/open 1\nexit\n",
+    )
 
     assert result.exit_code == 0
     assert handled == ["open file C:\\workspace\\README.md"]

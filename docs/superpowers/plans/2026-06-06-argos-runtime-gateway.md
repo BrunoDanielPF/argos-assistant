@@ -564,6 +564,8 @@ git commit -m "feat: expose authenticated local gateway API"
 
 ## Task 9: cliente e gerenciamento do processo
 
+**Status:** Concluida no commit do gateway residente.
+
 **Files:**
 - Create: `src/assistant/gateway/client.py`
 - Create: `src/assistant/gateway/process.py`
@@ -637,6 +639,8 @@ git commit -m "feat: manage the resident Argos gateway"
 
 ## Task 10: comandos CLI e fallback explicito
 
+**Status:** Concluida no commit do gateway residente.
+
 **Files:**
 - Modify: `src/assistant/cli.py`
 - Modify: `tests/test_cli.py`
@@ -697,6 +701,8 @@ git commit -m "feat: connect Argos CLI to resident gateway"
 ```
 
 ## Task 11: teste de integracao, documentacao e migracao
+
+**Status:** Concluida no commit do gateway residente.
 
 **Files:**
 - Create: `tests/gateway/test_end_to_end.py`

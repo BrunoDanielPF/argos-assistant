@@ -9,6 +9,8 @@ from rich.console import Console
 
 from assistant.agent import AssistantAgent
 from assistant.config import AppConfig
+from assistant.gateway.client import GatewayClient, GatewayError, GatewayUnavailable
+from assistant.gateway.process import GatewayProcessManager
 from assistant.memory.long_term import LongTermMemoryStore
 from assistant.runtime.factory import RuntimeFactory
 from assistant.tools.catalog import ToolCatalog
@@ -27,6 +29,63 @@ app = typer.Typer(help=CLI_DESCRIPTION)
 tools_app = typer.Typer(help="Gerenciar tools do Argos")
 app.add_typer(tools_app, name="tools")
 console = Console()
+
+
+class GatewayMemoryProxy:
+    def __init__(
+        self,
+        client: GatewayClient,
+        session_id: str,
+        cwd: str,
+    ) -> None:
+        self._client = client
+        self._session_id = session_id
+        self._context = {
+            "current_cwd": cwd,
+            "default_search_root": cwd,
+            "user_home": str(Path.home()),
+        }
+
+    def set_context(self, **kwargs) -> None:
+        self._context.update(
+            {key: value for key, value in kwargs.items() if value is not None}
+        )
+
+    def snapshot(self) -> dict:
+        try:
+            snapshot = self._client.get_session(self._session_id)
+        except GatewayError:
+            snapshot = {
+                "history": [],
+                "audit": [],
+                "suggestions": [],
+                "context": {},
+            }
+        snapshot["context"] = {
+            **snapshot.get("context", {}),
+            **self._context,
+        }
+        return snapshot
+
+
+class GatewayAgentAdapter:
+    def __init__(self, client: GatewayClient, session_id: str) -> None:
+        self._client = client
+        self._session_id = session_id
+        self.memory = GatewayMemoryProxy(client, session_id, os.getcwd())
+
+    def handle(self, user_input: str) -> dict:
+        cwd = self.memory.snapshot()["context"].get("current_cwd")
+        response = self._client.chat(
+            self._session_id,
+            user_input,
+            cwd=cwd,
+        )
+        return {
+            "ok": response.ok,
+            "message": response.message,
+            "suggestions": response.suggestions,
+        }
 
 
 def confirm_action(capability_name: str, arguments: dict) -> bool:
@@ -147,6 +206,20 @@ def build_agent(confirmer=None) -> AssistantAgent:
         config=AppConfig.load(),
         loading_context=lambda: console.status("Argos esta pensando..."),
     ).build_agent(confirmer=confirmer)
+
+
+def build_gateway_client() -> GatewayClient:
+    return GatewayClient(AppConfig.load())
+
+
+def build_gateway_agent(session_id: str) -> GatewayAgentAdapter:
+    return GatewayAgentAdapter(build_gateway_client(), session_id)
+
+
+def render_gateway_error(exc: GatewayError) -> None:
+    console.print(f"[ERROR] {exc}")
+    if isinstance(exc, GatewayUnavailable):
+        console.print("Execute 'argos start' para iniciar o servico residente.")
 
 
 def build_tool_catalog(config: AppConfig | None = None) -> ToolCatalog:
@@ -328,21 +401,99 @@ def run_interactive_session(
 
 
 @app.callback(invoke_without_command=True)
-def main(ctx: typer.Context) -> None:
+def main(
+    ctx: typer.Context,
+    direct: bool = typer.Option(False, "--direct"),
+    session: str = typer.Option("default", "--session"),
+) -> None:
     """CLI entry point."""
     if ctx.invoked_subcommand is None:
+        if direct:
+            agent = build_agent(confirmer=confirm_action)
+        else:
+            agent = build_gateway_agent(session)
+        try:
+            run_interactive_session(agent)
+        except GatewayError as exc:
+            render_gateway_error(exc)
+            raise typer.Exit(code=1) from exc
+
+
+@app.command()
+def chat(
+    prompt: str,
+    session: str = typer.Option("default", "--session"),
+    direct: bool = typer.Option(False, "--direct"),
+) -> None:
+    try:
+        if direct:
+            agent = build_agent(confirmer=confirm_action)
+            result = agent.handle(prompt)
+        else:
+            response = build_gateway_client().chat(session, prompt)
+            result = {
+                "ok": response.ok,
+                "message": response.message,
+                "suggestions": response.suggestions,
+            }
+        render_result(result)
+    except GatewayError as exc:
+        render_gateway_error(exc)
+        raise typer.Exit(code=1) from exc
+
+
+@app.command()
+def interactive(
+    session: str = typer.Option("default", "--session"),
+    direct: bool = typer.Option(False, "--direct"),
+) -> None:
+    if direct:
         agent = build_agent(confirmer=confirm_action)
+    else:
+        agent = build_gateway_agent(session)
+    try:
         run_interactive_session(agent)
+    except GatewayError as exc:
+        render_gateway_error(exc)
+        raise typer.Exit(code=1) from exc
 
 
 @app.command()
-def chat(prompt: str) -> None:
-    agent = build_agent(confirmer=confirm_action)
-    result = agent.handle(prompt)
-    render_result(result)
+def start() -> None:
+    status = GatewayProcessManager(AppConfig.load()).start()
+    console.print(f"[OK] Argos gateway iniciado (PID {status.pid}).")
 
 
 @app.command()
-def interactive() -> None:
-    agent = build_agent(confirmer=confirm_action)
-    run_interactive_session(agent)
+def stop() -> None:
+    status = GatewayProcessManager(AppConfig.load()).stop()
+    if status.running:
+        console.print(f"[ERROR] Argos gateway ainda ativo (PID {status.pid}).")
+        raise typer.Exit(code=1)
+    console.print("[OK] Argos gateway encerrado.")
+
+
+@app.command()
+def status() -> None:
+    manager_status = GatewayProcessManager(AppConfig.load()).status()
+    if not manager_status.running:
+        console.print("Argos gateway parado.")
+        raise typer.Exit(code=1)
+    try:
+        payload = build_gateway_client().status()
+    except GatewayError as exc:
+        render_gateway_error(exc)
+        raise typer.Exit(code=1) from exc
+    console.print(
+        f"Argos gateway ativo (PID {manager_status.pid}), "
+        f"modelo={payload['model']}, uptime={payload['uptime_seconds']:.1f}s."
+    )
+
+
+@app.command()
+def logs() -> None:
+    path = AppConfig.load().gateway_log_file
+    if not path.exists():
+        console.print("Nenhum log do gateway encontrado.")
+        return
+    console.print(path.read_text(encoding="utf-8", errors="replace"))

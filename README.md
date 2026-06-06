@@ -346,6 +346,62 @@ ollama create argos-qwen3:4b -f models/argos-qwen3-4b.Modelfile
 
 ## Uso
 
+### Servico residente
+
+O modo padrao usa o Argos Gateway local para manter a mesma sessao entre
+terminais e reinicios do cliente:
+
+```bash
+argos start
+argos status
+argos
+argos stop
+```
+
+Comandos enviados por `argos`, `argos interactive` e `argos chat` usam a
+sessao `default`. Para separar contextos:
+
+```bash
+argos chat --session projeto-x "continue o projeto"
+argos interactive --session projeto-x
+```
+
+O gateway aceita conexoes somente em `127.0.0.1` e exige um token local. O
+estado padrao fica em `~/.argos`:
+
+```text
+config.yaml
+argos.db
+gateway.token
+gateway.pid
+logs/gateway.log
+logs/events.jsonl
+```
+
+Para diagnostico, recuperacao ou uso sem o servico residente:
+
+```bash
+argos --direct
+argos chat --direct "oi"
+argos interactive --direct
+```
+
+O Argos nao troca silenciosamente para o modo direto quando o gateway esta
+indisponivel, pois isso criaria uma sessao diferente.
+
+Configuracao minima opcional em `~/.argos/config.yaml`:
+
+```yaml
+schema_version: "1.0"
+model: argos-qwen3:4b
+gateway_host: 127.0.0.1
+gateway_port: 17831
+```
+
+Se a porta estiver ocupada, altere `gateway_port` e reinicie o servico. Se o
+Ollama estiver indisponivel, o gateway permanece diagnosticavel por
+`argos status`, mas requisicoes ao modelo falharao ate o Ollama voltar.
+
 Use `argos` para conversa continua no terminal:
 
 ```bash
