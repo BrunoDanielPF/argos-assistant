@@ -43,6 +43,128 @@ O MVP atual entrega:
 - adaptador MCP minimo
 - catalogo inicial de skills do projeto
 
+## Arquitetura
+
+O Argos separa interpretacao, memoria, seguranca e execucao. O modelo local pode responder ou propor acoes, mas nao acessa diretamente o sistema operacional. Toda acao passa pelo agente, pela politica e pelo executor.
+
+```mermaid
+flowchart LR
+    user["Usuario"] --> cli["CLI Argos<br/>Typer + Rich"]
+    cli --> agent["AssistantAgent<br/>orquestracao"]
+
+    agent <--> session["Memoria de sessao<br/>historico, contexto e sugestoes"]
+    agent --> longterm["Memoria persistente<br/>Markdown em ~/.argos/memory"]
+    longterm --> agent
+
+    agent --> planner["Planner<br/>heuristicas + validacao JSON"]
+    planner --> ollama["Ollama API"]
+    ollama --> model["argos-qwen3:4b"]
+    model --> ollama
+    ollama --> planner
+
+    planner --> agent
+    agent --> policy{"Politica de execucao"}
+    policy -->|allow| executor["ActionExecutor"]
+    policy -->|confirm| confirmation["Confirmacao do usuario"]
+    confirmation -->|aprovada| executor
+    confirmation -->|recusada| result["Resultado cancelado"]
+    policy -->|blocked| result
+
+    executor --> capabilities["Capabilities locais<br/>apps, URLs, arquivos e busca"]
+    capabilities --> windows["Windows e sistema de arquivos"]
+    executor --> result["Resultado da execucao"]
+    result --> agent
+    agent --> cli
+
+    skills["Skills locais<br/>consultivas no MVP"] -.-> planner
+    mcp["MCPClient minimo<br/>listagem e chamada de tools"] -.-> agent
+```
+
+As setas pontilhadas representam integracoes existentes em nivel inicial, mas que ainda nao participam automaticamente de todo planejamento.
+
+### Fluxo de conversa e planejamento
+
+```mermaid
+sequenceDiagram
+    actor U as Usuario
+    participant C as CLI
+    participant A as AssistantAgent
+    participant S as SessionMemory
+    participant M as LongTermMemory
+    participant P as Planner
+    participant O as Ollama
+
+    U->>C: Envia uma solicitacao
+    C->>A: handle(prompt)
+    A->>S: Le contexto e ate 10 mensagens anteriores
+    A->>S: Registra a mensagem atual
+    A->>M: Busca aprendizados relevantes
+    M-->>A: Memorias encontradas
+    A->>P: Prompt + contexto + historico + memorias
+
+    alt Heuristica local reconhece o comando
+        P-->>A: action ou plan
+    else Necessita do modelo
+        P->>C: Inicia indicador de processamento
+        P->>O: Mensagens e instrucoes JSON
+        O-->>P: answer, action ou plan
+        P->>C: Encerra indicador de processamento
+        P-->>A: Plano validado
+    end
+
+    A->>S: Registra resposta e sugestoes
+    A-->>C: Resultado
+    C-->>U: Exibe resposta
+```
+
+### Fluxo de execucao segura
+
+```mermaid
+flowchart TD
+    request["Planner retorna action ou plan"] --> agentAction["Agente seleciona a proxima capability"]
+    agentAction --> policyCheck{"Qual e a politica?"}
+
+    policyCheck -->|allow| execute["Executar capability"]
+    policyCheck -->|confirm| ask["Solicitar confirmacao<br/>sem loading ativo"]
+    policyCheck -->|blocked| blocked["Bloquear acao"]
+
+    ask -->|y, yes, s ou sim| execute
+    ask -->|nao ou cancelamento| cancelled["Cancelar acao"]
+
+    execute --> success{"Execucao funcionou?"}
+    success -->|sim| store["Registrar resultado,<br/>auditoria e contexto"]
+    success -->|nao| recovery["Gerar mensagem de erro<br/>ou recuperacao orientada"]
+
+    store --> more{"Existem mais etapas?"}
+    more -->|sim| agentAction
+    more -->|nao| response["Responder ao usuario"]
+    recovery --> response
+    blocked --> response
+    cancelled --> response
+```
+
+### Fluxo de memoria
+
+```mermaid
+flowchart TD
+    input["Mensagem do usuario"] --> memoryType{"Tipo de memoria"}
+
+    memoryType -->|Conversa normal| short["Memoria curta da sessao"]
+    short --> history["Historico, cwd,<br/>resultados e sugestoes"]
+    history --> plannerContext["Contexto enviado ao Planner"]
+
+    memoryType -->|/remember, lembre que,<br/>aprenda que ou corrigindo| validate["Validar aprendizado"]
+    validate --> sensitive{"Contem dado sensivel?"}
+    sensitive -->|sim| reject["Recusar persistencia"]
+    sensitive -->|nao| confirmMemory["Pedir confirmacao"]
+    confirmMemory -->|recusada| reject
+    confirmMemory -->|aprovada| markdown["Salvar em correcoes.md"]
+
+    markdown --> search["Busca lexical por relevancia"]
+    search --> plannerContext
+    plannerContext --> responseMemory["Resposta ou plano personalizado"]
+```
+
 ## Estrategia de modelo
 
 O padrao do Argos deve priorizar eficiencia, baixa latencia e uso local confortavel. Por isso, o modelo operacional padrao e um modelo customizado no Ollama, atualmente `argos-qwen3:4b`, criado em cima de `qwen3:4b`.
@@ -117,15 +239,19 @@ Decisao atual:
 
 Fluxo futuro esperado:
 
-```text
-entrada CLI/voz/hotkey
--> carregar contexto e memoria
--> planejar
--> aplicar policy
--> pausar para confirmacao quando necessario
--> executar tool
--> salvar resultado ou aprendizado
--> responder por texto/voz
+```mermaid
+flowchart LR
+    inputFuture["CLI, voz ou hotkey"] --> resident["Servico residente"]
+    resident --> contextFuture["Carregar contexto e memoria"]
+    contextFuture --> workflow["Workflow duravel<br/>LangGraph em avaliacao"]
+    workflow --> planFuture["Planejar"]
+    planFuture --> policyFuture{"Aplicar politica"}
+    policyFuture -->|confirm| humanFuture["Human-in-the-loop"]
+    policyFuture -->|allow| toolFuture["Executar tool local ou MCP"]
+    humanFuture -->|aprovado| toolFuture
+    toolFuture --> checkpoint["Salvar checkpoint,<br/>resultado ou aprendizado"]
+    checkpoint --> outputFuture["Responder por texto ou voz"]
+    checkpoint --> queue["Fila assincrona,<br/>logs e notificacoes"]
 ```
 
 ## Roadmap
