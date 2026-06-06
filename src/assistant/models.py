@@ -20,6 +20,7 @@ class SessionContext(BaseModel):
     default_search_root: str | None = None
     user_home: str | None = None
     last_search_results: list[str] = Field(default_factory=list)
+    pending_clarification: dict | None = None
 
 
 class SessionSnapshot(BaseModel):

@@ -2,6 +2,7 @@ from collections.abc import Callable
 import inspect
 
 from assistant.execution.policy import decide_policy
+from assistant.files.resolver import FileResolver
 from assistant.memory.session import SessionMemory
 from assistant.models import AuditEvent
 from assistant.suggestions import build_suggestions
@@ -16,6 +17,7 @@ class AssistantAgent:
         long_term_memory=None,
         policy_decider: Callable[[str], str] | None = None,
         confirmer: Callable[[str, dict], bool] | None = None,
+        file_resolver: FileResolver | None = None,
     ) -> None:
         self._planner = planner
         self._executor = executor
@@ -23,6 +25,7 @@ class AssistantAgent:
         self._long_term_memory = long_term_memory
         self._policy_decider = policy_decider or decide_policy
         self._confirmer = confirmer
+        self._file_resolver = file_resolver or FileResolver()
 
     @property
     def memory(self) -> SessionMemory:
@@ -74,13 +77,82 @@ class AssistantAgent:
                 )
         return message
 
+    def _build_clarification_response(self, question: str, pending: dict) -> dict:
+        self._memory.set_pending_clarification(pending)
+        self._memory.add_assistant_message(question)
+        suggestions = build_suggestions("answer", question)
+        self._memory.set_suggestions(suggestions)
+        return {
+            "ok": True,
+            "message": question,
+            "suggestions": [item.model_dump() for item in suggestions],
+        }
+
+    def _prepare_action(self, capability_name: str, arguments: dict, context: dict) -> tuple[dict | None, dict | None]:
+        if capability_name != "write_file":
+            return arguments, None
+
+        path = arguments.get("path")
+        if not isinstance(path, str) or not path.strip():
+            return arguments, None
+
+        roots = []
+        for key in ("current_cwd", "user_home", "default_search_root"):
+            root = context.get(key)
+            if isinstance(root, str) and root.strip() and root not in roots:
+                roots.append(root)
+        resolution = self._file_resolver.resolve(path, roots)
+        if resolution.status == "resolved":
+            resolved_arguments = dict(arguments)
+            resolved_arguments["path"] = resolution.matches[0]
+            return resolved_arguments, None
+
+        if resolution.status == "ambiguous":
+            options = [
+                {"id": match, "label": match}
+                for match in resolution.matches
+            ]
+            options.append({"id": "cancel", "label": "cancelar"})
+            pending = {
+                "field": "path",
+                "question": f"Encontrei mais de um arquivo parecido com '{path}'. Qual devo usar?",
+                "action": {
+                    "capability": capability_name,
+                    "arguments": dict(arguments),
+                },
+                "options": options,
+            }
+        else:
+            pending = {
+                "field": "path",
+                "question": (
+                    f"Nao encontrei um arquivo parecido com '{path}'. "
+                    "Informe o caminho completo do arquivo ou cancele."
+                ),
+                "action": {
+                    "capability": capability_name,
+                    "arguments": dict(arguments),
+                },
+                "options": [{"id": "cancel", "label": "cancelar"}],
+                "accept_free_text": True,
+            }
+
+        question_lines = [pending["question"]]
+        if resolution.status == "ambiguous":
+            for index, option in enumerate(pending["options"], start=1):
+                question_lines.append(f"{index}. {option['label']}")
+        question_lines.append("Voce pode responder com o numero ou com suas proprias palavras.")
+        response = self._build_clarification_response("\n".join(question_lines), pending)
+        return None, response
+
     def handle(self, user_input: str) -> dict:
         snapshot = self._memory.snapshot()
         previous_history = snapshot.get("history", [])
+        snapshot_context = dict(snapshot.get("context") or {})
         self._memory.add_user_message(user_input)
         planner_params = inspect.signature(self._planner.create_plan).parameters
         if "context" in planner_params:
-            context = dict(snapshot.get("context") or {})
+            context = dict(snapshot_context)
             context["conversation_history"] = previous_history[-10:]
             if self._long_term_memory is not None:
                 long_term_memories = self._long_term_memory.search(user_input, max_results=5)
@@ -93,9 +165,25 @@ class AssistantAgent:
         else:
             plan = self._planner.create_plan(user_input)
 
+        if plan["mode"] == "clarification":
+            return self._build_clarification_response(
+                question=plan["question"],
+                pending=plan["pending"],
+            )
+
+        if snapshot_context.get("pending_clarification") is not None:
+            self._memory.clear_pending_clarification()
+
         if plan["mode"] == "action":
             capability_name = plan["capability"]
-            arguments = plan["arguments"]
+            arguments, clarification_response = self._prepare_action(
+                capability_name,
+                plan["arguments"],
+                snapshot_context,
+            )
+            if clarification_response is not None:
+                return clarification_response
+            assert arguments is not None
             result = self._execute_action(capability_name, arguments)
             if capability_name == "search_files" and result.ok and result.data:
                 matches = result.data.get("matches")
@@ -112,7 +200,14 @@ class AssistantAgent:
             last_capability = "plan"
             for step in plan["steps"]:
                 capability_name = step["capability"]
-                arguments = step["arguments"]
+                arguments, clarification_response = self._prepare_action(
+                    capability_name,
+                    step["arguments"],
+                    snapshot_context,
+                )
+                if clarification_response is not None:
+                    return clarification_response
+                assert arguments is not None
                 last_capability = capability_name
                 result = self._execute_action(capability_name, arguments)
                 messages.append(result.message)

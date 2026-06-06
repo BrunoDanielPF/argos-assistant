@@ -134,3 +134,54 @@ def test_executor_reports_search_files_no_matches(tmp_path):
 
     assert result.ok is False
     assert "No files matched" in result.message
+
+
+def test_executor_replaces_existing_file_content(tmp_path):
+    target = tmp_path / "hello_world.md"
+    target.write_text("hello world", encoding="utf-8")
+
+    result = ActionExecutor().execute(
+        "write_file",
+        {"path": str(target), "content": "ola mundo bruno", "write_mode": "replace"},
+    )
+
+    assert result.ok is True
+    assert target.read_text(encoding="utf-8") == "ola mundo bruno"
+
+
+def test_executor_appends_to_existing_file_content(tmp_path):
+    target = tmp_path / "hello_world.md"
+    target.write_text("hello world", encoding="utf-8")
+
+    result = ActionExecutor().execute(
+        "write_file",
+        {"path": str(target), "content": "ola mundo bruno", "write_mode": "append"},
+    )
+
+    assert result.ok is True
+    assert target.read_text(encoding="utf-8") == "hello world\nola mundo bruno"
+
+
+def test_executor_write_file_rejects_missing_file(tmp_path):
+    target = tmp_path / "missing.md"
+
+    result = ActionExecutor().execute(
+        "write_file",
+        {"path": str(target), "content": "texto", "write_mode": "replace"},
+    )
+
+    assert result.ok is False
+    assert not target.exists()
+
+
+def test_executor_write_file_rejects_unknown_mode(tmp_path):
+    target = tmp_path / "hello_world.md"
+    target.write_text("hello", encoding="utf-8")
+
+    result = ActionExecutor().execute(
+        "write_file",
+        {"path": str(target), "content": "texto", "write_mode": "maybe"},
+    )
+
+    assert result.ok is False
+    assert target.read_text(encoding="utf-8") == "hello"

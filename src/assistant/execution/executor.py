@@ -83,6 +83,34 @@ class ActionExecutor:
                 data={"path": str(file_path)},
             )
 
+        if capability_name == "write_file":
+            path = args.get("path")
+            content = args.get("content")
+            write_mode = args.get("write_mode")
+            if not isinstance(path, str) or not path.strip():
+                return ExecutionResult(ok=False, message="Missing path for write_file")
+            if not isinstance(content, str):
+                return ExecutionResult(ok=False, message="Invalid content for write_file")
+            if write_mode not in {"replace", "append"}:
+                return ExecutionResult(ok=False, message="Invalid write mode for write_file")
+
+            file_path = Path(path)
+            if not file_path.is_file():
+                return ExecutionResult(ok=False, message=f"File not found: {path}")
+
+            if write_mode == "replace":
+                updated_content = content
+            else:
+                current_content = file_path.read_text(encoding="utf-8")
+                separator = "" if not current_content or current_content.endswith("\n") else "\n"
+                updated_content = f"{current_content}{separator}{content}"
+            file_path.write_text(updated_content, encoding="utf-8")
+            return ExecutionResult(
+                ok=True,
+                message=f"Updated file {file_path}",
+                data={"path": str(file_path), "write_mode": write_mode},
+            )
+
         if capability_name == "search_files":
             root = Path(args["root"])
             pattern = args["pattern"]

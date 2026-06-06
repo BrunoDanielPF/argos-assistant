@@ -50,6 +50,7 @@ def test_session_memory_updates_context_fields():
         "default_search_root": "C:\\two",
         "user_home": None,
         "last_search_results": [],
+        "pending_clarification": None,
     }
 
 

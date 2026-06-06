@@ -36,6 +36,9 @@ O MVP atual entrega:
 - memoria curta de sessao
 - primeira versao de memoria persistente em Markdown
 - recuperacao de memorias persistentes relevantes antes do planejamento
+- clarificacoes contextuais respondidas por numero ou linguagem natural
+- resolucao de arquivos por nome parcial, extensao omitida ou erro de digitacao
+- edicao segura de arquivos existentes com modos substituir e adicionar
 - catalogo local de capabilities
 - planos multi-etapa simples para criar arquivo e abrir em seguida
 - politicas `allow`, `confirm` e `blocked`
@@ -141,6 +144,32 @@ flowchart TD
     recovery --> response
     blocked --> response
     cancelled --> response
+```
+
+### Fluxo de edicao de arquivos
+
+```mermaid
+flowchart TD
+    requestEdit["Usuario pede para editar um arquivo"] --> extractEdit["Extrair referencia e novo texto"]
+    extractEdit --> modeKnown{"Modo de escrita esta claro?"}
+    modeKnown -->|nao| askMode["Perguntar: substituir ou adicionar?"]
+    askMode --> naturalAnswer["Resposta por numero, sinonimo ou frase natural"]
+    naturalAnswer --> confidence{"Interpretacao confiavel?"}
+    confidence -->|nao| askMode
+    confidence -->|sim| resolveName["Resolver nome aproximado"]
+    modeKnown -->|sim| resolveName
+
+    resolveName --> candidates{"Quantos candidatos plausiveis?"}
+    candidates -->|nenhum| askPath["Solicitar caminho completo"]
+    candidates -->|varios| askFile["Listar candidatos e perguntar qual usar"]
+    candidates -->|um| preview["Preparar operacao com caminho resolvido"]
+    askPath --> resolveName
+    askFile --> resolveName
+
+    preview --> confirmEdit["Pedir confirmacao"]
+    confirmEdit -->|aprovada| writeEdit["Substituir ou adicionar conteudo"]
+    confirmEdit -->|recusada| cancelEdit["Cancelar sem alterar arquivo"]
+    writeEdit --> validateEdit["Validar e responder"]
 ```
 
 ### Fluxo de memoria
@@ -348,6 +377,15 @@ No modo interativo, as 10 mensagens anteriores da sessao sao enviadas ao modelo.
 argos: quanto e 2 + 2?
 argos: e 4 + 4?
 ```
+
+Clarificacoes podem ser respondidas naturalmente. Os numeros apresentados sao apenas atalhos:
+
+```text
+argos: edite o arquivo hello_world colocando o texto ola mundo bruno
+argos: adicione no final sem apagar o que ja existe
+```
+
+O Argos procura nomes sem extensao e pequenas variacoes de digitacao nos diretorios da sessao. Se encontrar varios arquivos parecidos, pergunta qual deles deve usar. Se nao encontrar nenhum, solicita o caminho completo e nao cria um arquivo automaticamente.
 
 ## Comandos interativos
 

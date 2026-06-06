@@ -8,3 +8,7 @@ def test_policy_requires_confirmation_for_shell_command():
 
 def test_policy_requires_confirmation_for_create_file():
     assert decide_policy("create_file") == "confirm"
+
+
+def test_policy_requires_confirmation_for_write_file():
+    assert decide_policy("write_file") == "confirm"

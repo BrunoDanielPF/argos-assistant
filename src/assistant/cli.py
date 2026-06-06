@@ -10,6 +10,7 @@ from assistant.agent import AssistantAgent
 from assistant.capabilities.registry import build_default_registry
 from assistant.config import AppConfig
 from assistant.execution.executor import ActionExecutor
+from assistant.files.resolver import FileResolver
 from assistant.llm.ollama_client import OllamaClient
 from assistant.memory.long_term import LongTermMemoryStore
 from assistant.memory.session import SessionMemory
@@ -150,6 +151,7 @@ def build_agent(confirmer=None) -> AssistantAgent:
         memory=memory,
         long_term_memory=long_term_memory,
         confirmer=confirmer,
+        file_resolver=FileResolver(),
     )
 
 

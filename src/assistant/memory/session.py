@@ -36,6 +36,12 @@ class SessionMemory:
     def set_last_search_results(self, results: list[str]) -> None:
         self._context.last_search_results = list(results)
 
+    def set_pending_clarification(self, pending: dict) -> None:
+        self._context.pending_clarification = dict(pending)
+
+    def clear_pending_clarification(self) -> None:
+        self._context.pending_clarification = None
+
     def snapshot(self) -> dict:
         return SessionSnapshot(
             history=self._history,

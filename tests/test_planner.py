@@ -197,6 +197,137 @@ def test_planner_loading_context_wraps_only_llm_call():
     assert events == ["loading-start", "llm-call", "loading-stop"]
 
 
+def test_planner_requests_write_mode_for_ambiguous_file_edit():
+    planner = Planner(llm_client=FailIfCalledClient())
+
+    plan = planner.create_plan(
+        "preciso editar um arquivo hello_world colocando de texto ola mundo bruno nesse arquivo"
+    )
+
+    assert plan["mode"] == "clarification"
+    assert plan["pending"]["field"] == "write_mode"
+    assert plan["pending"]["action"] == {
+        "capability": "write_file",
+        "arguments": {
+            "path": "hello_world",
+            "content": "ola mundo bruno",
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected_mode"),
+    [
+        ("1", "replace"),
+        ("pode substituir tudo", "replace"),
+        ("adicione no final sem apagar", "append"),
+    ],
+)
+def test_planner_resolves_pending_write_mode_from_natural_answer(answer, expected_mode):
+    planner = Planner(llm_client=FailIfCalledClient())
+    pending = {
+        "field": "write_mode",
+        "question": "Voce quer substituir ou adicionar ao final?",
+        "action": {
+            "capability": "write_file",
+            "arguments": {"path": "hello_world", "content": "ola mundo bruno"},
+        },
+        "options": [
+            {"id": "replace", "label": "substituir"},
+            {"id": "append", "label": "adicionar ao final"},
+            {"id": "cancel", "label": "cancelar"},
+        ],
+    }
+
+    plan = planner.create_plan(answer, context={"pending_clarification": pending})
+
+    assert plan == {
+        "mode": "action",
+        "capability": "write_file",
+        "arguments": {
+            "path": "hello_world",
+            "content": "ola mundo bruno",
+            "write_mode": expected_mode,
+        },
+    }
+
+
+def test_planner_repeats_clarification_when_answer_is_uncertain():
+    class UncertainClient:
+        def chat(self, messages):
+            return {
+                "response": (
+                    '{"mode":"clarification_response",'
+                    '"selection":null,"confidence":0.2}'
+                )
+            }
+
+    pending = {
+        "field": "write_mode",
+        "question": "Voce quer substituir ou adicionar ao final?",
+        "action": {
+            "capability": "write_file",
+            "arguments": {"path": "hello_world", "content": "ola mundo bruno"},
+        },
+        "options": [
+            {"id": "replace", "label": "substituir"},
+            {"id": "append", "label": "adicionar ao final"},
+        ],
+    }
+    planner = Planner(llm_client=UncertainClient())
+
+    plan = planner.create_plan("nao sei bem", context={"pending_clarification": pending})
+
+    assert plan["mode"] == "clarification"
+    assert plan["pending"] == pending
+
+
+def test_planner_accepts_model_generated_clarification():
+    class ClarificationClient:
+        def chat(self, messages):
+            return {
+                "response": (
+                    '{"mode":"clarification",'
+                    '"question":"Qual arquivo voce quer usar?",'
+                    '"pending":{"field":"path",'
+                    '"action":{"capability":"write_file","arguments":{'
+                    '"content":"novo","write_mode":"replace"}},'
+                    '"options":['
+                    '{"id":"one","label":"primeiro"},'
+                    '{"id":"two","label":"segundo"}]}}'
+                )
+            }
+
+    planner = Planner(llm_client=ClarificationClient())
+
+    plan = planner.create_plan("edite aquele arquivo")
+
+    assert plan["mode"] == "clarification"
+    assert plan["question"] == "Qual arquivo voce quer usar?"
+    assert plan["pending"]["field"] == "path"
+
+
+def test_planner_resolves_file_option_from_extension_description():
+    planner = Planner(llm_client=FailIfCalledClient())
+    pending = {
+        "field": "path",
+        "question": "Qual arquivo devo usar?",
+        "action": {
+            "capability": "write_file",
+            "arguments": {"content": "novo", "write_mode": "replace"},
+        },
+        "options": [
+            {"id": "C:\\Users\\frand\\hello_world.md", "label": "C:\\Users\\frand\\hello_world.md"},
+            {"id": "C:\\Users\\frand\\hello_world.txt", "label": "C:\\Users\\frand\\hello_world.txt"},
+            {"id": "cancel", "label": "cancelar"},
+        ],
+    }
+
+    plan = planner.create_plan("quero o arquivo markdown", context={"pending_clarification": pending})
+
+    assert plan["arguments"]["path"] == "C:\\Users\\frand\\hello_world.md"
+
+
 class FakeAlternateActionClient:
     def chat(self, messages):
         return {

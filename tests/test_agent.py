@@ -1,4 +1,8 @@
 from assistant.agent import AssistantAgent
+from assistant.execution.executor import ActionExecutor
+from assistant.files.resolver import FileResolver
+from assistant.memory.session import SessionMemory
+from assistant.planner import Planner
 
 
 class FakePlanner:
@@ -280,3 +284,120 @@ def test_agent_suggests_file_creation_when_open_file_fails_missing():
     assert response["ok"] is False
     assert "File not found" in response["message"]
     assert "Posso criar esse arquivo" in response["message"]
+
+
+def test_agent_stores_planner_clarification_in_session():
+    pending = {
+        "field": "write_mode",
+        "question": "Substituir ou adicionar?",
+        "action": {
+            "capability": "write_file",
+            "arguments": {"path": "hello_world", "content": "ola mundo bruno"},
+        },
+        "options": [
+            {"id": "replace", "label": "substituir"},
+            {"id": "append", "label": "adicionar"},
+        ],
+    }
+
+    class ClarificationPlanner:
+        def create_plan(self, user_input: str, context: dict | None = None) -> dict:
+            return {
+                "mode": "clarification",
+                "question": "Substituir ou adicionar?",
+                "pending": pending,
+            }
+
+    agent = AssistantAgent(planner=ClarificationPlanner(), executor=FakeExecutor())
+
+    response = agent.handle("edite o arquivo")
+
+    assert response["ok"] is True
+    assert response["message"] == "Substituir ou adicionar?"
+    assert agent.memory.snapshot()["context"]["pending_clarification"] == pending
+
+
+def test_agent_resolves_file_before_confirmation_and_completes_natural_clarification(tmp_path):
+    target = tmp_path / "hello_world.md"
+    target.write_text("hello world", encoding="utf-8")
+    confirmations = []
+
+    def confirm(capability_name: str, arguments: dict) -> bool:
+        confirmations.append((capability_name, dict(arguments)))
+        return True
+
+    memory = SessionMemory()
+    memory.set_context(
+        current_cwd=str(tmp_path),
+        default_search_root=str(tmp_path),
+        user_home=str(tmp_path),
+    )
+    planner = Planner(llm_client=FailIfCalledClientForAgent())
+    agent = AssistantAgent(
+        planner=planner,
+        executor=ActionExecutor(),
+        memory=memory,
+        confirmer=confirm,
+        file_resolver=FileResolver(),
+    )
+
+    clarification = agent.handle(
+        "preciso editar um arquivo hello_world colocando de texto ola mundo bruno nesse arquivo"
+    )
+    result = agent.handle("adicione no final sem apagar o que existe")
+
+    assert clarification["ok"] is True
+    assert "adicionar" in clarification["message"].lower()
+    assert result["ok"] is True
+    assert target.read_text(encoding="utf-8") == "hello world\nola mundo bruno"
+    assert confirmations == [
+        (
+            "write_file",
+            {
+                "path": str(target.resolve()),
+                "content": "ola mundo bruno",
+                "write_mode": "append",
+            },
+        )
+    ]
+    assert agent.memory.snapshot()["context"]["pending_clarification"] is None
+
+
+def test_agent_asks_user_to_choose_when_file_resolution_is_ambiguous(tmp_path):
+    (tmp_path / "hello_world.md").write_text("markdown", encoding="utf-8")
+    (tmp_path / "hello_world.txt").write_text("text", encoding="utf-8")
+    memory = SessionMemory()
+    memory.set_context(current_cwd=str(tmp_path), user_home=str(tmp_path))
+
+    class WritePlanner:
+        def create_plan(self, user_input: str, context: dict | None = None) -> dict:
+            return {
+                "mode": "action",
+                "capability": "write_file",
+                "arguments": {
+                    "path": "hello_world",
+                    "content": "novo",
+                    "write_mode": "replace",
+                },
+            }
+
+    agent = AssistantAgent(
+        planner=WritePlanner(),
+        executor=ActionExecutor(),
+        memory=memory,
+        confirmer=lambda capability, arguments: True,
+        file_resolver=FileResolver(),
+    )
+
+    response = agent.handle("substitua")
+
+    assert response["ok"] is True
+    assert "mais de um arquivo" in response["message"].lower()
+    pending = agent.memory.snapshot()["context"]["pending_clarification"]
+    assert pending["field"] == "path"
+    assert len(pending["options"]) == 3
+
+
+class FailIfCalledClientForAgent:
+    def chat(self, messages):
+        raise AssertionError("LLM should not be called for deterministic clarification")
