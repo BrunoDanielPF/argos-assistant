@@ -8,22 +8,14 @@ import typer
 from rich.console import Console
 
 from assistant.agent import AssistantAgent
-from assistant.capabilities.registry import build_default_registry
 from assistant.config import AppConfig
-from assistant.execution.executor import ActionExecutor
-from assistant.execution.policy import decide_policy
-from assistant.files.resolver import FileResolver
-from assistant.llm.ollama_client import OllamaClient
 from assistant.memory.long_term import LongTermMemoryStore
-from assistant.memory.session import SessionMemory
-from assistant.planner import Planner
+from assistant.runtime.factory import RuntimeFactory
 from assistant.tools.catalog import ToolCatalog
-from assistant.tools.audit import ToolAuditLog
 from assistant.tools.generator import ToolDraftGenerator
 from assistant.tools.installer import ToolInstaller
 from assistant.tools.manifest import load_tool_manifest
 from assistant.tools.permissions import UnsafeToolPermission, expand_permissions
-from assistant.tools.runner import ToolRunner
 from assistant.tools.state import ToolStateStore, hash_tool_files
 from assistant.tools.validator import ToolValidator
 
@@ -151,60 +143,10 @@ def render_persistent_memories(memory_store: LongTermMemoryStore) -> None:
 
 
 def build_agent(confirmer=None) -> AssistantAgent:
-    config = AppConfig()
-    tool_catalog = build_tool_catalog(config)
-    capabilities = [
-        item.name for item in build_default_registry(tool_catalog).list_all()
-    ]
-    memory = SessionMemory()
-    memory.set_context(
-        current_cwd=os.getcwd(),
-        default_search_root=os.getcwd(),
-        user_home=str(Path.home()),
-    )
-    planner = Planner(
-        OllamaClient(
-            model=config.model,
-            base_url=config.ollama_base_url,
-            timeout_seconds=config.ollama_timeout_seconds,
-            keep_alive=config.ollama_keep_alive,
-            think=config.ollama_think,
-            options={
-                "num_predict": config.ollama_num_predict,
-                "num_ctx": config.ollama_num_ctx,
-            },
-        ),
-        capabilities=capabilities,
+    return RuntimeFactory(
+        config=AppConfig.load(),
         loading_context=lambda: console.status("Argos esta pensando..."),
-        tool_definitions=[
-            {
-                "name": tool.manifest.name,
-                "description": tool.manifest.description,
-                "input_schema": tool.manifest.input_schema,
-            }
-            for tool in tool_catalog.list_enabled()
-        ],
-    )
-    executor = ActionExecutor()
-    if hasattr(executor, "configure_tools"):
-        executor.configure_tools(
-            tool_catalog,
-            ToolRunner(audit_log=ToolAuditLog(config.tool_audit_file)),
-        )
-    long_term_memory = LongTermMemoryStore(config.memory_dir)
-    return AssistantAgent(
-        planner=planner,
-        executor=executor,
-        memory=memory,
-        long_term_memory=long_term_memory,
-        policy_decider=lambda capability: (
-            "confirm"
-            if tool_catalog.get_enabled(capability) is not None
-            else decide_policy(capability)
-        ),
-        confirmer=confirmer,
-        file_resolver=FileResolver(),
-    )
+    ).build_agent(confirmer=confirmer)
 
 
 def build_tool_catalog(config: AppConfig | None = None) -> ToolCatalog:
