@@ -104,6 +104,19 @@ def remember_learning(memory_store: LongTermMemoryStore, learning: str) -> None:
     console.print(f"[OK] Memory saved to {saved_path}")
 
 
+def render_persistent_memories(memory_store: LongTermMemoryStore) -> None:
+    memories = memory_store.list_memories()
+    if not memories:
+        console.print("No persistent memories found.")
+        return
+
+    for index, memory in enumerate(memories, start=1):
+        source_file = memory.get("source_file", "memory.md")
+        context = memory.get("context", "geral")
+        learning = memory.get("learning", "")
+        console.print(f"{index}. [{context}] {learning} ({source_file})")
+
+
 def build_agent(confirmer=None) -> AssistantAgent:
     config = AppConfig()
     capabilities = [item.name for item in build_default_registry().list_all()]
@@ -121,10 +134,12 @@ def build_agent(confirmer=None) -> AssistantAgent:
         capabilities=capabilities,
     )
     executor = ActionExecutor()
+    long_term_memory = LongTermMemoryStore(config.memory_dir)
     return AssistantAgent(
         planner=planner,
         executor=executor,
         memory=memory,
+        long_term_memory=long_term_memory,
         confirmer=confirmer,
     )
 
@@ -177,6 +192,9 @@ def run_interactive_session(
             snapshot = session_memory.snapshot() if session_memory is not None else {}
             for item in snapshot.get("history", []):
                 console.print(f"{item['role']}: {item['content']}")
+            continue
+        if prompt.strip() == "/memory":
+            render_persistent_memories(memory_store)
             continue
         learning = extract_memory_learning(prompt)
         if learning:

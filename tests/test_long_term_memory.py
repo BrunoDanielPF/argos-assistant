@@ -31,3 +31,23 @@ def test_long_term_memory_rejects_sensitive_learning(tmp_path):
 
     assert result.ok is False
     assert "sensivel" in result.reason
+
+
+def test_long_term_memory_searches_relevant_markdown_entries(tmp_path):
+    store = LongTermMemoryStore(tmp_path)
+    store.remember(
+        learning="O usuario prefere respostas objetivas em portugues.",
+        context="preferencias",
+        today=date(2026, 6, 5),
+    )
+    store.remember(
+        learning="O projeto usa Ollama com qwen3:4b.",
+        context="modelo",
+        today=date(2026, 6, 5),
+    )
+
+    results = store.search("como devo responder para o usuario?", max_results=1)
+
+    assert len(results) == 1
+    assert results[0]["learning"] == "O usuario prefere respostas objetivas em portugues."
+    assert results[0]["source_file"] == "correcoes.md"

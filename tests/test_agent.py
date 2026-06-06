@@ -144,3 +144,41 @@ def test_agent_stores_last_search_results_after_search():
     assert agent.memory.snapshot()["context"]["last_search_results"] == [
         "C:\\workspace\\README.md"
     ]
+
+
+def test_agent_injects_relevant_long_term_memories_into_context():
+    class ContextPlanner:
+        def __init__(self) -> None:
+            self.context = None
+
+        def create_plan(self, user_input: str, context: dict | None = None) -> dict:
+            self.context = context
+            return {"mode": "answer", "content": "Resposta objetiva"}
+
+    class FakeLongTermMemory:
+        def search(self, query: str, max_results: int = 5) -> list[dict]:
+            return [
+                {
+                    "learning": "O usuario prefere respostas objetivas em portugues.",
+                    "context": "preferencias",
+                    "source_file": "correcoes.md",
+                }
+            ]
+
+    planner = ContextPlanner()
+    agent = AssistantAgent(
+        planner=planner,
+        executor=FakeExecutor(),
+        long_term_memory=FakeLongTermMemory(),
+    )
+
+    response = agent.handle("como devo responder?")
+
+    assert response["ok"] is True
+    assert planner.context["long_term_memories"] == [
+        {
+            "learning": "O usuario prefere respostas objetivas em portugues.",
+            "context": "preferencias",
+            "source_file": "correcoes.md",
+        }
+    ]

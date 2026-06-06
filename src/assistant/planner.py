@@ -23,7 +23,8 @@ class Planner:
         self._llm_client = llm_client
         self._capabilities = capabilities or []
 
-    def _build_system_prompt(self) -> str:
+    def _build_system_prompt(self, context: dict | None = None) -> str:
+        context = context or {}
         prompt = (
             "You are Argos. "
             "Return only JSON. "
@@ -38,6 +39,13 @@ class Planner:
             "Do not use run_shell_command for file search when search_files fits. "
             'When responding in answer mode, identify yourself as Argos if the user asks your name or who you are.'
         )
+        long_term_memories = context.get("long_term_memories")
+        if isinstance(long_term_memories, list) and long_term_memories:
+            prompt += " Relevant long-term memories:"
+            for memory in long_term_memories[:5]:
+                if isinstance(memory, dict) and isinstance(memory.get("learning"), str):
+                    memory_context = memory.get("context", "geral")
+                    prompt += f" [{memory_context}] {memory['learning']}"
         return prompt
 
     def create_plan(self, user_input: str, context: dict | None = None) -> dict:
@@ -48,7 +56,7 @@ class Planner:
         messages = [
             {
                 "role": "system",
-                "content": self._build_system_prompt(),
+                "content": self._build_system_prompt(context=context),
             },
             {"role": "user", "content": user_input},
         ]

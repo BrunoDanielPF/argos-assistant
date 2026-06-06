@@ -34,6 +34,7 @@ O MVP atual entrega:
 - abertura de resultado por indice no modo interativo
 - memoria curta de sessao
 - primeira versao de memoria persistente em Markdown
+- recuperacao de memorias persistentes relevantes antes do planejamento
 - catalogo local de capabilities
 - politicas `allow`, `confirm` e `blocked`
 - loader de skills locais
@@ -82,6 +83,8 @@ Implementacao atual:
 - confirmacao antes de salvar
 - escrita em `%USERPROFILE%\.argos\memory\correcoes.md`
 - bloqueio simples para conteudo sensivel como senha, token, secret ou chave privada
+- comando `/memory` para listar memorias persistentes
+- busca lexical simples para injetar memorias relevantes no contexto do planner
 
 ## Orquestracao de workflows
 
@@ -116,7 +119,7 @@ entrada CLI/voz/hotkey
 - adicionar simulacao de comandos antes da execucao
 - melhorar sugestoes contextuais
 - integrar skills no prompt do planner
-- permitir consulta basica da memoria persistente
+- melhorar consulta da memoria persistente com ranking semantico
 
 ### Fase 2: Tools e automacao local
 
@@ -199,6 +202,7 @@ O comando `assistant` ainda existe como alias de compatibilidade, mas o nome ofi
 - `/open <path>`: abre um arquivo pelo caminho
 - `/open <indice>`: abre um item da ultima busca por indice
 - `/remember <aprendizado>`: salva um aprendizado confirmado na memoria persistente
+- `/memory`: lista memorias persistentes salvas
 - `exit` ou `quit`: encerra a sessao
 
 ## Skills do projeto
@@ -269,6 +273,7 @@ No modo interativo:
 ```text
 argos: lembre que eu prefiro respostas objetivas em portugues
 Save this memory? [y/N]: y
+argos: /memory
 argos: exit
 ```
 
@@ -276,6 +281,12 @@ Depois confira o arquivo:
 
 ```powershell
 Get-Content "$env:USERPROFILE\.argos\memory\correcoes.md"
+```
+
+Depois de salvar uma memoria, prompts futuros usam memorias relevantes como contexto do planner. Exemplo:
+
+```text
+argos: como voce deve responder para mim?
 ```
 
 ## Ollama

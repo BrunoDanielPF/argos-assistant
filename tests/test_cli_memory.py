@@ -54,3 +54,51 @@ def test_cli_lembre_que_uses_memory_flow_without_calling_agent(monkeypatch, tmp_
     assert result.exit_code == 0
     assert handled == []
     assert "uso Windows" in (Path(tmp_path) / "correcoes.md").read_text(encoding="utf-8")
+
+
+def test_cli_memory_command_lists_persistent_memories(monkeypatch, tmp_path):
+    monkeypatch.setenv("ARGOS_MEMORY_DIR", str(tmp_path))
+    (tmp_path / "correcoes.md").write_text(
+        "# Correcoes\n\n"
+        "## Preferencia de resposta\n\n"
+        "- Data: 2026-06-05\n"
+        "- Contexto: preferencias\n"
+        "- Aprendizado: O usuario prefere respostas objetivas em portugues.\n"
+        "- Fonte: correcao do usuario\n\n",
+        encoding="utf-8",
+    )
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self.memory = None
+
+        def handle(self, user_input: str) -> dict:
+            raise AssertionError("agent should not handle /memory")
+
+    monkeypatch.setattr("assistant.cli.build_agent", lambda confirmer=None: FakeAgent())
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["interactive"], input="/memory\nexit\n")
+
+    assert result.exit_code == 0
+    assert "O usuario prefere respostas objetivas em portugues." in result.stdout
+    assert "correcoes.md" in result.stdout
+
+
+def test_cli_memory_command_handles_empty_memory(monkeypatch, tmp_path):
+    monkeypatch.setenv("ARGOS_MEMORY_DIR", str(tmp_path))
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self.memory = None
+
+        def handle(self, user_input: str) -> dict:
+            raise AssertionError("agent should not handle /memory")
+
+    monkeypatch.setattr("assistant.cli.build_agent", lambda confirmer=None: FakeAgent())
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["interactive"], input="/memory\nexit\n")
+
+    assert result.exit_code == 0
+    assert "No persistent memories found" in result.stdout

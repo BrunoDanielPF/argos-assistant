@@ -66,7 +66,84 @@ class LongTermMemoryStore:
             )
         return target
 
+    def list_memories(self) -> list[dict]:
+        if not self._memory_dir.exists():
+            return []
+
+        memories = []
+        for memory_file in sorted(self._memory_dir.glob("*.md")):
+            memories.extend(self._read_memory_file(memory_file))
+        return memories
+
+    def search(self, query: str, max_results: int = 5) -> list[dict]:
+        query_terms = self._terms(query)
+        scored = []
+        for memory in self.list_memories():
+            haystack = " ".join(
+                [
+                    memory.get("title", ""),
+                    memory.get("context", ""),
+                    memory.get("learning", ""),
+                ]
+            )
+            score = len(query_terms.intersection(self._terms(haystack)))
+            if score > 0:
+                scored.append((score, memory))
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return [memory for _, memory in scored[:max_results]]
+
     def _title_from_learning(self, learning: str) -> str:
         title = learning.strip().rstrip(".")
         title = re.sub(r"\s+", " ", title)
         return title[:80] or "Aprendizado"
+
+    def _read_memory_file(self, memory_file: Path) -> list[dict]:
+        content = memory_file.read_text(encoding="utf-8")
+        entries = []
+        for block in re.split(r"\n(?=## )", content):
+            lines = [line.strip() for line in block.splitlines() if line.strip()]
+            if not lines or not lines[0].startswith("## "):
+                continue
+
+            entry = {
+                "title": lines[0].removeprefix("## ").strip(),
+                "source_file": memory_file.name,
+            }
+            for line in lines[1:]:
+                if line.startswith("- Data:"):
+                    entry["date"] = line.removeprefix("- Data:").strip()
+                elif line.startswith("- Contexto:"):
+                    entry["context"] = line.removeprefix("- Contexto:").strip()
+                elif line.startswith("- Aprendizado:"):
+                    entry["learning"] = line.removeprefix("- Aprendizado:").strip()
+                elif line.startswith("- Fonte:"):
+                    entry["source"] = line.removeprefix("- Fonte:").strip()
+
+            if entry.get("learning"):
+                entries.append(entry)
+        return entries
+
+    def _terms(self, text: str) -> set[str]:
+        stopwords = {
+            "a",
+            "as",
+            "como",
+            "de",
+            "devo",
+            "do",
+            "e",
+            "em",
+            "eu",
+            "o",
+            "os",
+            "para",
+            "que",
+            "um",
+            "uma",
+        }
+        return {
+            term
+            for term in re.findall(r"[a-zA-Z0-9_À-ÿ:]+", text.lower())
+            if len(term) > 2 and term not in stopwords
+        }

@@ -13,12 +13,14 @@ class AssistantAgent:
         planner,
         executor,
         memory: SessionMemory | None = None,
+        long_term_memory=None,
         policy_decider: Callable[[str], str] | None = None,
         confirmer: Callable[[str, dict], bool] | None = None,
     ) -> None:
         self._planner = planner
         self._executor = executor
         self._memory = memory or SessionMemory()
+        self._long_term_memory = long_term_memory
         self._policy_decider = policy_decider or decide_policy
         self._confirmer = confirmer
 
@@ -41,9 +43,15 @@ class AssistantAgent:
         self._memory.add_user_message(user_input)
         planner_params = inspect.signature(self._planner.create_plan).parameters
         if "context" in planner_params:
+            context = self._memory.snapshot().get("context")
+            if self._long_term_memory is not None:
+                long_term_memories = self._long_term_memory.search(user_input, max_results=5)
+                if long_term_memories:
+                    context = dict(context or {})
+                    context["long_term_memories"] = long_term_memories
             plan = self._planner.create_plan(
                 user_input,
-                context=self._memory.snapshot().get("context"),
+                context=context,
             )
         else:
             plan = self._planner.create_plan(user_input)

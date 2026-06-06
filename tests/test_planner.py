@@ -105,6 +105,28 @@ def test_planner_uses_context_for_find_without_explicit_path():
     }
 
 
+def test_planner_includes_long_term_memories_in_system_prompt():
+    llm_client = FakeOllamaClient()
+    planner = Planner(llm_client=llm_client)
+
+    planner.create_plan(
+        "como devo responder?",
+        context={
+            "long_term_memories": [
+                {
+                    "learning": "O usuario prefere respostas objetivas em portugues.",
+                    "context": "preferencias",
+                    "source_file": "correcoes.md",
+                }
+            ]
+        },
+    )
+
+    system_prompt = llm_client.messages[0]["content"]
+    assert "Relevant long-term memories:" in system_prompt
+    assert "O usuario prefere respostas objetivas em portugues." in system_prompt
+
+
 class FakeAlternateActionClient:
     def chat(self, messages):
         return {
