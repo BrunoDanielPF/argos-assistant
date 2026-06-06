@@ -83,6 +83,30 @@ Implementacao atual:
 - escrita em `%USERPROFILE%\.argos\memory\correcoes.md`
 - bloqueio simples para conteudo sensivel como senha, token, secret ou chave privada
 
+## Orquestracao de workflows
+
+Argos deve manter o core atual simples enquanto o produto ainda esta focado em CLI, tools locais e memoria. A integracao com LangGraph deve entrar de forma incremental quando o projeto chegar em tarefas assincronas, modo residente, checkpoints, retomada de execucao e human-in-the-loop.
+
+Decisao atual:
+
+- nao reescrever o nucleo em LangChain agora
+- manter planner, policy, executor e memoria com fronteiras proprias
+- avaliar LangGraph como orquestrador para o modo residente
+- usar LangChain somente quando uma integracao concreta justificar a dependencia
+
+Fluxo futuro esperado:
+
+```text
+entrada CLI/voz/hotkey
+-> carregar contexto e memoria
+-> planejar
+-> aplicar policy
+-> pausar para confirmacao quando necessario
+-> executar tool
+-> salvar resultado ou aprendizado
+-> responder por texto/voz
+```
+
 ## Roadmap
 
 ### Fase 1: CLI operacional
@@ -105,6 +129,7 @@ Implementacao atual:
 
 ### Fase 3: Voz e assistente residente
 
+- avaliar introducao incremental de LangGraph para workflows duraveis
 - adicionar entrada por voz com STT local
 - adicionar resposta por voz com TTS local
 - criar acionamento por hotkey ou wake command
@@ -197,6 +222,7 @@ Skills iniciais:
 - `command-simulation`
 - `documentation-maintenance`
 - `long-term-memory`
+- `workflow-orchestration`
 
 Nesta fase, as skills sao consultivas. Elas orientam planejamento, documentacao e geracao de artefatos, mas nao executam acoes locais nem ignoram a politica do executor.
 

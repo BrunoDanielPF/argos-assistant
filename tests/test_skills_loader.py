@@ -57,6 +57,7 @@ def test_argos_project_skills_catalog_is_loadable():
         "command-simulation",
         "documentation-maintenance",
         "long-term-memory",
+        "workflow-orchestration",
     }
 
     assert expected_names.issubset(by_name)

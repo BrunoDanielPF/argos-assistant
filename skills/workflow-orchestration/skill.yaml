@@ -1,0 +1,10 @@
+name: workflow-orchestration
+description: Planeja workflows do Argos para tarefas assincronas, modo residente, confirmacao humana, checkpoints e futura integracao incremental com LangGraph.
+triggers:
+  - workflow
+  - langgraph
+  - tarefa assincrona
+  - background
+  - orquestracao
+permission_profile: advisory
+instructions_file: prompt.md
