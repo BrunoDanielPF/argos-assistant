@@ -28,6 +28,37 @@ def test_cli_chat_command_uses_agent(monkeypatch):
     assert "Ask me to open documentation next" in result.stdout
 
 
+def test_cli_chat_command_wraps_agent_call_in_status(monkeypatch):
+    statuses = []
+
+    class FakeStatus:
+        def __init__(self, message: str) -> None:
+            statuses.append(message)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+    class FakeAgent:
+        def handle(self, user_input: str) -> dict:
+            return {
+                "ok": True,
+                "message": "Handled",
+                "suggestions": [{"text": "Ask me for the next step"}],
+            }
+
+    monkeypatch.setattr("assistant.cli.console.status", lambda message: FakeStatus(message))
+    monkeypatch.setattr("assistant.cli.build_agent", lambda confirmer=None: FakeAgent())
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["chat", "oi"])
+
+    assert result.exit_code == 0
+    assert statuses == ["Argos esta pensando..."]
+
+
 def test_cli_chat_command_shows_failure_status(monkeypatch):
     class FakeAgent:
         def handle(self, user_input: str) -> dict:

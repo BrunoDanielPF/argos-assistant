@@ -7,15 +7,29 @@ class OllamaClient:
         model: str,
         base_url: str = "http://localhost:11434/api",
         timeout_seconds: float = 30.0,
+        keep_alive: str = "10m",
+        think: bool = False,
+        options: dict | None = None,
     ) -> None:
         self._model = model
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
+        self._keep_alive = keep_alive
+        self._think = think
+        self._options = options or {}
 
     def chat(self, messages: list[dict]) -> dict:
         response = httpx.post(
             f"{self._base_url}/chat",
-            json={"model": self._model, "messages": messages, "stream": False},
+            json={
+                "model": self._model,
+                "messages": messages,
+                "stream": False,
+                "format": "json",
+                "think": self._think,
+                "keep_alive": self._keep_alive,
+                "options": self._options,
+            },
             timeout=self._timeout_seconds,
         )
         response.raise_for_status()

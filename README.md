@@ -59,6 +59,14 @@ Modelo recomendado para o MVP:
 - base do modelo customizado: `qwen3:4b`
 - alternativa mais forte: `qwen3:8b`
 
+Opcoes de runtime usadas pelo Argos:
+
+- `keep_alive`: `10m`, para manter o modelo carregado depois da primeira chamada
+- `format`: `json`, para reduzir respostas fora do schema esperado
+- `think`: `false`, para evitar custo extra de raciocinio em comandos curtos
+- `num_predict`: `512`, para limitar respostas longas sem truncar JSON estruturado
+- `num_ctx`: `4096`, para manter contexto suficiente sem custo excessivo
+
 Camadas de customizacao:
 
 - `Modelfile`: persona, idioma, formato JSON, parametros e regras estaveis
@@ -202,6 +210,8 @@ argos chat "find README.md"
 ```
 
 O comando `assistant` ainda existe como alias de compatibilidade, mas o nome oficial do projeto e `argos`.
+
+Durante chamadas ao modelo, a CLI mostra `Argos esta pensando...` enquanto aguarda a resposta.
 
 ## Comandos interativos
 
@@ -348,3 +358,4 @@ Invoke-RestMethod -Uri 'http://localhost:11434/api/create' -Method Post -Content
 - `ConnectError` ou connection refused: o daemon do Ollama nao esta rodando em `localhost:11434`
 - `{"models":[]}` em `/api/tags`: o daemon esta ativo, mas nenhum modelo foi baixado
 - planner retornando formato inesperado: atualizar o codigo e repetir, pois o planner normaliza formatos comuns como `capability/arguments` e `action/<fields>`
+- primeira resposta lenta: normalmente e carregamento frio do modelo; as chamadas seguintes tendem a ser mais rapidas por causa de `keep_alive`

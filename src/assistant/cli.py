@@ -51,6 +51,11 @@ def render_result(result: dict) -> None:
         console.print(f"- {suggestion['text']}")
 
 
+def handle_with_loading(agent: AssistantAgent, prompt: str) -> dict:
+    with console.status("Argos esta pensando..."):
+        return agent.handle(prompt)
+
+
 def get_session_memory(agent):
     return getattr(agent, "memory", None) or getattr(agent, "_memory", None)
 
@@ -130,6 +135,12 @@ def build_agent(confirmer=None) -> AssistantAgent:
             model=config.model,
             base_url=config.ollama_base_url,
             timeout_seconds=config.ollama_timeout_seconds,
+            keep_alive=config.ollama_keep_alive,
+            think=config.ollama_think,
+            options={
+                "num_predict": config.ollama_num_predict,
+                "num_ctx": config.ollama_num_ctx,
+            },
         ),
         capabilities=capabilities,
     )
@@ -173,7 +184,7 @@ def run_interactive_session(
         if prompt.startswith("/open "):
             target_path = prompt[6:].strip()
             resolved_target = resolve_open_target(agent, target_path)
-            result = agent.handle(f"open file {resolved_target}")
+            result = handle_with_loading(agent, f"open file {resolved_target}")
             render_result(result)
             continue
         if prompt.strip() == "/pwd":
@@ -202,7 +213,7 @@ def run_interactive_session(
             continue
         if not prompt.strip():
             continue
-        result = agent.handle(prompt)
+        result = handle_with_loading(agent, prompt)
         render_result(result)
 
 
@@ -217,7 +228,7 @@ def main(ctx: typer.Context) -> None:
 @app.command()
 def chat(prompt: str) -> None:
     agent = build_agent(confirmer=confirm_action)
-    result = agent.handle(prompt)
+    result = handle_with_loading(agent, prompt)
     render_result(result)
 
 
