@@ -4,6 +4,8 @@ from pathlib import Path
 import subprocess
 import webbrowser
 
+from assistant.tools.permissions import UnsafeToolPermission, expand_permissions
+
 
 @dataclass
 class ExecutionResult:
@@ -21,10 +23,23 @@ KNOWN_APPLICATIONS = {
 
 
 class ActionExecutor:
-    def __init__(self, open_url_fn=None, open_application_fn=None, open_file_fn=None) -> None:
+    def __init__(
+        self,
+        open_url_fn=None,
+        open_application_fn=None,
+        open_file_fn=None,
+        tool_catalog=None,
+        tool_runner=None,
+    ) -> None:
         self._open_url = open_url_fn or webbrowser.open
         self._open_application = open_application_fn or self._default_open_application
         self._open_file = open_file_fn or self._default_open_file
+        self._tool_catalog = tool_catalog
+        self._tool_runner = tool_runner
+
+    def configure_tools(self, tool_catalog, tool_runner) -> None:
+        self._tool_catalog = tool_catalog
+        self._tool_runner = tool_runner
 
     def _default_open_application(self, application: str) -> None:
         if hasattr(os, "startfile"):
@@ -135,6 +150,28 @@ class ActionExecutor:
                 message="\n".join(lines),
                 data={"matches": visible_matches, "all_count": len(matches)},
             )
+
+        if self._tool_catalog is not None and self._tool_runner is not None:
+            tool = self._tool_catalog.get_enabled(capability_name)
+            if tool is not None:
+                try:
+                    expand_permissions(tool.manifest.permissions, args)
+                except UnsafeToolPermission as exc:
+                    return ExecutionResult(
+                        ok=False,
+                        message=f"Unsafe tool permissions: {exc}",
+                    )
+                result = self._tool_runner.run(tool, args)
+                if result.ok:
+                    return ExecutionResult(
+                        ok=True,
+                        message=f"Tool {capability_name} executed successfully",
+                        data=result.result,
+                    )
+                return ExecutionResult(
+                    ok=False,
+                    message=f"Tool {capability_name} failed: {result.message}",
+                )
 
         return ExecutionResult(
             ok=False, message=f"Unsupported capability: {capability_name}"

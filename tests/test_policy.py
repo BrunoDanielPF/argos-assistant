@@ -12,3 +12,7 @@ def test_policy_requires_confirmation_for_create_file():
 
 def test_policy_requires_confirmation_for_write_file():
     assert decide_policy("write_file") == "confirm"
+
+
+def test_policy_blocks_unknown_capability():
+    assert decide_policy("clarification") == "blocked"

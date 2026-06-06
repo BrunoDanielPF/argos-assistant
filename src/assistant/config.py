@@ -17,3 +17,40 @@ class AppConfig(BaseModel):
             os.environ.get("ARGOS_MEMORY_DIR", Path.home() / ".argos" / "memory")
         )
     )
+    tools_dir: Path = Field(
+        default_factory=lambda: Path(
+            os.environ.get("ARGOS_TOOLS_DIR", Path.home() / ".argos" / "tools")
+        )
+    )
+    tool_drafts_dir: Path = Field(
+        default_factory=lambda: Path(
+            os.environ.get(
+                "ARGOS_TOOL_DRAFTS_DIR",
+                Path.home() / ".argos" / "tool-drafts",
+            )
+        )
+    )
+    tool_envs_dir: Path = Field(
+        default_factory=lambda: Path(
+            os.environ.get(
+                "ARGOS_TOOL_ENVS_DIR",
+                Path.home() / ".argos" / "tool-envs",
+            )
+        )
+    )
+    tool_state_file: Path = Field(
+        default_factory=lambda: Path(
+            os.environ.get(
+                "ARGOS_TOOL_STATE_FILE",
+                Path.home() / ".argos" / "tool-state.json",
+            )
+        )
+    )
+    tool_audit_file: Path = Field(
+        default_factory=lambda: Path(
+            os.environ.get(
+                "ARGOS_TOOL_AUDIT_FILE",
+                Path.home() / ".argos" / "audit" / "tools.jsonl",
+            )
+        )
+    )

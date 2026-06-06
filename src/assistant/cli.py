@@ -1,4 +1,5 @@
 import builtins
+import json
 import os
 from pathlib import Path
 import sys
@@ -10,17 +11,29 @@ from assistant.agent import AssistantAgent
 from assistant.capabilities.registry import build_default_registry
 from assistant.config import AppConfig
 from assistant.execution.executor import ActionExecutor
+from assistant.execution.policy import decide_policy
 from assistant.files.resolver import FileResolver
 from assistant.llm.ollama_client import OllamaClient
 from assistant.memory.long_term import LongTermMemoryStore
 from assistant.memory.session import SessionMemory
 from assistant.planner import Planner
+from assistant.tools.catalog import ToolCatalog
+from assistant.tools.audit import ToolAuditLog
+from assistant.tools.generator import ToolDraftGenerator
+from assistant.tools.installer import ToolInstaller
+from assistant.tools.manifest import load_tool_manifest
+from assistant.tools.permissions import UnsafeToolPermission, expand_permissions
+from assistant.tools.runner import ToolRunner
+from assistant.tools.state import ToolStateStore, hash_tool_files
+from assistant.tools.validator import ToolValidator
 
 ASSISTANT_NAME = "Argos"
 ASSISTANT_PROMPT = ASSISTANT_NAME.lower()
 CLI_DESCRIPTION = f"{ASSISTANT_NAME} Local AI Assistant"
 
 app = typer.Typer(help=CLI_DESCRIPTION)
+tools_app = typer.Typer(help="Gerenciar tools do Argos")
+app.add_typer(tools_app, name="tools")
 console = Console()
 
 
@@ -35,6 +48,24 @@ def confirm_action(capability_name: str, arguments: dict) -> bool:
         )
     else:
         console.print(f"Confirmation required for {capability_name}: {arguments}")
+        if "." in capability_name:
+            tool = build_tool_catalog().get_enabled(capability_name)
+            if tool is not None:
+                try:
+                    permissions = expand_permissions(
+                        tool.manifest.permissions,
+                        arguments,
+                    )
+                    console.print(
+                        "Effective permissions: "
+                        f"write={permissions.filesystem_write}, "
+                        f"read={permissions.filesystem_read}, "
+                        f"network={permissions.network_enabled}, "
+                        f"subprocess={permissions.subprocess_executables}"
+                    )
+                except UnsafeToolPermission as exc:
+                    console.print(f"[ERROR] Unsafe tool permissions: {exc}")
+                    return False
     if not sys.stdin or not sys.stdin.isatty():
         console.print("Non-interactive session detected; cancelling confirmation-required action.")
         return False
@@ -121,7 +152,10 @@ def render_persistent_memories(memory_store: LongTermMemoryStore) -> None:
 
 def build_agent(confirmer=None) -> AssistantAgent:
     config = AppConfig()
-    capabilities = [item.name for item in build_default_registry().list_all()]
+    tool_catalog = build_tool_catalog(config)
+    capabilities = [
+        item.name for item in build_default_registry(tool_catalog).list_all()
+    ]
     memory = SessionMemory()
     memory.set_context(
         current_cwd=os.getcwd(),
@@ -142,16 +176,150 @@ def build_agent(confirmer=None) -> AssistantAgent:
         ),
         capabilities=capabilities,
         loading_context=lambda: console.status("Argos esta pensando..."),
+        tool_definitions=[
+            {
+                "name": tool.manifest.name,
+                "description": tool.manifest.description,
+                "input_schema": tool.manifest.input_schema,
+            }
+            for tool in tool_catalog.list_enabled()
+        ],
     )
     executor = ActionExecutor()
+    if hasattr(executor, "configure_tools"):
+        executor.configure_tools(
+            tool_catalog,
+            ToolRunner(audit_log=ToolAuditLog(config.tool_audit_file)),
+        )
     long_term_memory = LongTermMemoryStore(config.memory_dir)
     return AssistantAgent(
         planner=planner,
         executor=executor,
         memory=memory,
         long_term_memory=long_term_memory,
+        policy_decider=lambda capability: (
+            "confirm"
+            if tool_catalog.get_enabled(capability) is not None
+            else decide_policy(capability)
+        ),
         confirmer=confirmer,
         file_resolver=FileResolver(),
+    )
+
+
+def build_tool_catalog(config: AppConfig | None = None) -> ToolCatalog:
+    config = config or AppConfig()
+    bundled_root = Path(__file__).resolve().parents[2] / "tools"
+    return ToolCatalog(
+        tools_root=config.tools_dir,
+        state_store=ToolStateStore(config.tool_state_file),
+        bundled_root=bundled_root,
+        envs_root=config.tool_envs_dir,
+    )
+
+
+@tools_app.command("list")
+def tools_list() -> None:
+    tools = build_tool_catalog().list_enabled()
+    if not tools:
+        console.print("Nenhuma tool habilitada.")
+        return
+    for tool in tools:
+        source = "bundled" if tool.trusted else "local"
+        console.print(
+            f"{tool.manifest.name} {tool.manifest.version} "
+            f"[{source}] - {tool.manifest.description}",
+            markup=False,
+        )
+
+
+@tools_app.command("inspect")
+def tools_inspect(name: str) -> None:
+    tool = build_tool_catalog().get_enabled(name)
+    if tool is None:
+        console.print(f"[ERROR] Tool nao encontrada ou desabilitada: {name}")
+        raise typer.Exit(code=1)
+    payload = {
+        "name": tool.manifest.name,
+        "version": tool.manifest.version,
+        "description": tool.manifest.description,
+        "input_schema": tool.manifest.input_schema,
+        "output_schema": tool.manifest.output_schema,
+        "permissions": tool.manifest.permissions.model_dump(),
+    }
+    console.print(json.dumps(payload, indent=2, ensure_ascii=False), markup=False)
+
+
+@tools_app.command("validate")
+def tools_validate(path: str) -> None:
+    report = ToolValidator().validate(Path(path))
+    if report.ok:
+        console.print("[OK] Tool valida")
+        return
+    for finding in report.findings:
+        console.print(f"[ERROR] {finding.code}: {finding.message}")
+    raise typer.Exit(code=1)
+
+
+@tools_app.command("register")
+def tools_register(path: str) -> None:
+    config = AppConfig()
+    tool_dir = Path(path)
+    manifest = load_tool_manifest(tool_dir)
+    report = ToolValidator().validate(tool_dir)
+    if not report.ok:
+        console.print("[ERROR] Tool invalida; execute tools validate para detalhes.")
+        raise typer.Exit(code=1)
+    store = ToolStateStore(config.tool_state_file)
+    store.register_draft(manifest.name, manifest.version, hash_tool_files(tool_dir))
+    store.transition(manifest.name, manifest.version, "validating")
+    store.transition(manifest.name, manifest.version, "validated")
+    console.print(f"[OK] Draft registrado: {manifest.name}@{manifest.version}")
+
+
+@tools_app.command("approve")
+def tools_approve(name: str, version: str) -> None:
+    store = ToolStateStore(AppConfig().tool_state_file)
+    store.transition(name, version, "approved")
+    console.print(f"[OK] Tool aprovada: {name}@{version}")
+
+
+@tools_app.command("install")
+def tools_install(path: str) -> None:
+    config = AppConfig()
+    installed = ToolInstaller(
+        tools_root=config.tools_dir,
+        envs_root=config.tool_envs_dir,
+        state_store=ToolStateStore(config.tool_state_file),
+    ).install(Path(path))
+    console.print(f"[OK] Tool instalada em {installed}")
+
+
+@tools_app.command("enable")
+def tools_enable(name: str, version: str) -> None:
+    store = ToolStateStore(AppConfig().tool_state_file)
+    store.transition(name, version, "enabled")
+    console.print(f"[OK] Tool habilitada: {name}@{version}")
+
+
+@tools_app.command("disable")
+def tools_disable(name: str, version: str) -> None:
+    store = ToolStateStore(AppConfig().tool_state_file)
+    store.transition(name, version, "disabled")
+    console.print(f"[OK] Tool desabilitada: {name}@{version}")
+
+
+@tools_app.command("generate")
+def tools_generate(definition: str) -> None:
+    config = AppConfig()
+    definition_payload = json.loads(Path(definition).read_text(encoding="utf-8"))
+    draft = ToolDraftGenerator(
+        drafts_root=config.tool_drafts_dir,
+        state_store=ToolStateStore(config.tool_state_file),
+    ).generate(definition_payload)
+    console.print(
+        f"[OK] Draft criado em {draft.path} com estado {draft.state}. "
+        "Ele nao esta instalado nem habilitado."
     )
 
 

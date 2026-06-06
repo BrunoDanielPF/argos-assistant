@@ -10,4 +10,4 @@ def decide_policy(capability_name: str) -> str:
         return "confirm"
     if capability_name in BLOCKED:
         return "blocked"
-    return "confirm"
+    return "blocked"

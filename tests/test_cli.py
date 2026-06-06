@@ -361,3 +361,33 @@ def test_confirm_action_returns_false_without_tty(monkeypatch):
     result = confirm_action("search_files", {"root": "C:\\docs", "pattern": "notes.txt"})
 
     assert result is False
+
+
+def test_cli_tools_list_shows_bundled_tool(monkeypatch):
+    from assistant.cli import app
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["tools", "list"])
+
+    assert result.exit_code == 0
+    assert "local.spring.create_project" in result.stdout
+
+
+def test_cli_tools_inspect_shows_schema():
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["tools", "inspect", "local.spring.create_project"])
+
+    assert result.exit_code == 0
+    assert "java_version" in result.stdout
+    assert "filesystem" in result.stdout
+
+
+def test_cli_tools_help_lists_lifecycle_commands():
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["tools", "--help"])
+
+    assert result.exit_code == 0
+    for command in ("register", "approve", "install", "enable", "disable", "generate"):
+        assert command in result.stdout

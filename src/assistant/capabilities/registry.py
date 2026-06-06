@@ -20,9 +20,8 @@ class CapabilityRegistry:
         return None
 
 
-def build_default_registry() -> CapabilityRegistry:
-    return CapabilityRegistry(
-        [
+def build_default_registry(tool_catalog=None) -> CapabilityRegistry:
+    capabilities = [
             Capability(name="open_application", description="Open a local application"),
             Capability(name="create_file", description="Create a local file with content"),
             Capability(name="write_file", description="Replace or append content in an existing file"),
@@ -31,4 +30,12 @@ def build_default_registry() -> CapabilityRegistry:
             Capability(name="search_files", description="Search files in a directory"),
             Capability(name="run_shell_command", description="Run a shell command"),
         ]
-    )
+    if tool_catalog is not None:
+        capabilities.extend(
+            Capability(
+                name=tool.manifest.name,
+                description=tool.manifest.description,
+            )
+            for tool in tool_catalog.list_enabled()
+        )
+    return CapabilityRegistry(capabilities)

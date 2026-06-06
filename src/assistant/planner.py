@@ -27,10 +27,12 @@ class Planner:
         llm_client,
         capabilities: list[str] | None = None,
         loading_context=None,
+        tool_definitions: list[dict] | None = None,
     ) -> None:
         self._llm_client = llm_client
         self._capabilities = capabilities or []
         self._loading_context = loading_context or nullcontext
+        self._tool_definitions = tool_definitions or []
 
     def _build_system_prompt(self, context: dict | None = None) -> str:
         context = context or {}
@@ -48,6 +50,12 @@ class Planner:
         )
         if self._capabilities:
             prompt += f" Supported capabilities: {', '.join(self._capabilities)}."
+        if self._tool_definitions:
+            prompt += (
+                " Dynamic tool contracts: "
+                + json.dumps(self._tool_definitions, ensure_ascii=False, sort_keys=True)
+                + "."
+            )
         prompt += (
             " Prefer the most specific supported capability. "
             "Do not use run_shell_command for file search when search_files fits. "
@@ -100,6 +108,26 @@ class Planner:
         normalized_input = user_input.strip()
         lowered_input = normalized_input.lower()
         context = context or {}
+
+        if (
+            "projeto" in lowered_input
+            and any(term in lowered_input for term in ("comecar", "começar", "desenvolver"))
+            and not any(
+                term in lowered_input
+                for term in ("java", "python", "node", "backend", "frontend", "mobile")
+            )
+        ):
+            return {
+                "mode": "answer",
+                "content": (
+                    "Qual tipo de projeto voce quer criar e qual linguagem ou stack "
+                    "pretende usar?"
+                ),
+            }
+
+        spring_plan = self._heuristic_spring_project_plan(lowered_input, context)
+        if spring_plan is not None:
+            return spring_plan
 
         edit_plan = self._heuristic_file_edit_plan(normalized_input, lowered_input)
         if edit_plan is not None:
@@ -180,6 +208,84 @@ class Planner:
                 }
 
         return None
+
+    def _heuristic_spring_project_plan(
+        self,
+        lowered_input: str,
+        context: dict,
+    ) -> dict | None:
+        project_terms = ("projeto", "app", "aplicativo", "backend")
+        wants_project = any(term in lowered_input for term in project_terms)
+        wants_java = "java" in lowered_input
+        wants_structure = any(
+            term in lowered_input
+            for term in ("criar", "desenvolver", "estruturar", "arquivos iniciais")
+        )
+        if not (wants_project and wants_java and wants_structure):
+            return None
+
+        questions = []
+        if "spring" not in lowered_input:
+            questions.append(
+                {
+                    "field": "_framework",
+                    "question": "Qual framework Java voce quer usar?",
+                    "options": [
+                        {"id": "spring_boot", "label": "Spring Boot"},
+                        {"id": "cancel", "label": "cancelar"},
+                    ],
+                }
+            )
+        questions.extend(
+            [
+                {
+                    "field": "name",
+                    "question": "Qual deve ser o nome do projeto?",
+                    "options": [{"id": "cancel", "label": "cancelar"}],
+                    "accept_free_text": True,
+                },
+                {
+                    "field": "java_version",
+                    "question": "Qual versao do Java devemos usar?",
+                    "options": [
+                        {"id": 21, "label": "Java 21"},
+                        {"id": 17, "label": "Java 17"},
+                        {"id": "cancel", "label": "cancelar"},
+                    ],
+                },
+                {
+                    "field": "build_tool",
+                    "question": "Qual ferramenta de build devemos usar?",
+                    "options": [
+                        {"id": "maven", "label": "Maven"},
+                        {"id": "gradle", "label": "Gradle"},
+                        {"id": "cancel", "label": "cancelar"},
+                    ],
+                },
+                {
+                    "field": "group_id",
+                    "question": "Qual group ID devemos usar? Exemplo: com.example",
+                    "options": [{"id": "cancel", "label": "cancelar"}],
+                    "accept_free_text": True,
+                },
+            ]
+        )
+        first = questions.pop(0)
+        pending = {
+            **first,
+            "action": {
+                "capability": "local.spring.create_project",
+                "arguments": {
+                    "directory": context.get("user_home") or str(Path.home()),
+                },
+            },
+            "remaining_questions": questions,
+        }
+        return {
+            "mode": "clarification",
+            "question": self._format_clarification_question(pending),
+            "pending": pending,
+        }
 
     def _heuristic_file_edit_plan(
         self,
@@ -285,6 +391,27 @@ class Planner:
             raise PlannerError("Invalid pending clarification action")
         resolved_arguments = dict(arguments)
         resolved_arguments[field] = selection
+        remaining_questions = pending.get("remaining_questions")
+        if isinstance(remaining_questions, list) and remaining_questions:
+            next_question = dict(remaining_questions[0])
+            next_pending = {
+                **next_question,
+                "action": {
+                    "capability": capability,
+                    "arguments": resolved_arguments,
+                },
+                "remaining_questions": remaining_questions[1:],
+            }
+            return {
+                "mode": "clarification",
+                "question": self._format_clarification_question(next_pending),
+                "pending": next_pending,
+            }
+        resolved_arguments = {
+            key: value
+            for key, value in resolved_arguments.items()
+            if not key.startswith("_")
+        }
         return {
             "mode": "action",
             "capability": capability,
@@ -296,7 +423,8 @@ class Planner:
         options = [
             option
             for option in pending.get("options", [])
-            if isinstance(option, dict) and isinstance(option.get("id"), str)
+            if isinstance(option, dict)
+            and isinstance(option.get("id"), (str, int))
         ]
         number_match = re.fullmatch(r"\s*(\d+)\s*", user_input)
         if number_match:
@@ -325,11 +453,11 @@ class Planner:
             label = self._normalize_text(str(option.get("label", "")))
             if label and (normalized == label or label in normalized):
                 return option_id
-            for alias in aliases.get(option_id, ()):
+            for alias in aliases.get(str(option_id), ()):
                 if alias in normalized:
                     return option_id
             if pending.get("field") == "path":
-                option_path = Path(option_id)
+                option_path = Path(str(option_id))
                 option_name = self._normalize_text(option_path.name)
                 if option_name and option_name in normalized:
                     return option_id

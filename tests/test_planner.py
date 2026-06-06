@@ -151,6 +151,93 @@ def test_planner_includes_long_term_memories_in_system_prompt():
     assert "O usuario prefere respostas objetivas em portugues." in system_prompt
 
 
+def test_planner_includes_dynamic_tool_schema_in_system_prompt():
+    llm_client = FakeOllamaClient()
+    planner = Planner(
+        llm_client=llm_client,
+        tool_definitions=[
+            {
+                "name": "local.spring.create_project",
+                "description": "Cria um projeto Spring Boot.",
+                "input_schema": {
+                    "type": "object",
+                    "required": ["name", "directory"],
+                },
+            }
+        ],
+    )
+
+    planner.create_plan("crie um backend")
+
+    system_prompt = llm_client.messages[0]["content"]
+    assert "local.spring.create_project" in system_prompt
+    assert '"required": ["name", "directory"]' in system_prompt
+
+
+def test_planner_starts_spring_project_workflow_for_java_backend(tmp_path):
+    planner = Planner(llm_client=FailIfCalledClient())
+
+    plan = planner.create_plan(
+        "quero criar um app backend com java, me ajude estruturando os arquivos iniciais",
+        context={"user_home": str(tmp_path)},
+    )
+
+    assert plan["mode"] == "clarification"
+    assert plan["pending"]["field"] == "_framework"
+    assert plan["pending"]["action"]["capability"] == "local.spring.create_project"
+
+
+def test_planner_keeps_generic_project_opening_non_executable():
+    planner = Planner(llm_client=FailIfCalledClient())
+
+    plan = planner.create_plan("argos, vamos comecar a desenvolver um projeto")
+
+    assert plan["mode"] == "answer"
+    assert "tipo de projeto" in plan["content"].lower()
+
+
+def test_planner_continues_spring_workflow_after_framework_answer(tmp_path):
+    planner = Planner(llm_client=FailIfCalledClient())
+    first = planner.create_plan(
+        "quero criar um app backend com java, me ajude estruturando os arquivos iniciais",
+        context={"user_home": str(tmp_path)},
+    )
+
+    second = planner.create_plan(
+        "vamos usar spring boot",
+        context={"pending_clarification": first["pending"]},
+    )
+
+    assert second["mode"] == "clarification"
+    assert second["pending"]["field"] == "name"
+    assert "nome" in second["question"].lower()
+
+
+def test_planner_completes_spring_workflow_with_natural_answers(tmp_path):
+    planner = Planner(llm_client=FailIfCalledClient())
+    plan = planner.create_plan(
+        "quero criar um backend java com spring boot",
+        context={"user_home": str(tmp_path)},
+    )
+    for answer in ("pedidos-api", "java 21", "maven", "com.example"):
+        plan = planner.create_plan(
+            answer,
+            context={"pending_clarification": plan["pending"]},
+        )
+
+    assert plan == {
+        "mode": "action",
+        "capability": "local.spring.create_project",
+        "arguments": {
+            "name": "pedidos-api",
+            "directory": str(tmp_path),
+            "java_version": 21,
+            "build_tool": "maven",
+            "group_id": "com.example",
+        },
+    }
+
+
 def test_planner_sends_previous_conversation_to_model():
     llm_client = FakeOllamaClient()
     planner = Planner(llm_client=llm_client)

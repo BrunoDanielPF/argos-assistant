@@ -45,6 +45,10 @@ O MVP atual entrega:
 - loader de skills locais
 - adaptador MCP minimo
 - catalogo inicial de skills do projeto
+- Tool SDK com manifesto, schemas, lifecycle e catalogo dinamico
+- execucao de tools aprovadas por protocolo JSON em subprocesso
+- geracao de drafts de tools sem instalacao ou execucao automatica
+- tool bundled para criar projetos Spring Boot
 
 ## Arquitetura
 
@@ -423,6 +427,128 @@ Skills iniciais:
 - `workflow-orchestration`
 
 Nesta fase, as skills sao consultivas. Elas orientam planejamento, documentacao e geracao de artefatos, mas nao executam acoes locais nem ignoram a politica do executor.
+
+## Tool SDK
+
+Tools sao capacidades executaveis portateis. Cada tool declara contrato de entrada, saida, runtime e permissoes em `tool.yaml`. Diferente de uma skill, uma tool pode produzir efeitos na maquina e sempre passa por validacao, politica e confirmacao.
+
+```mermaid
+flowchart LR
+    request["Solicitacao do usuario"] --> catalog["Tool Catalog"]
+    catalog -->|tool habilitada| schema["Validar input schema"]
+    catalog -->|tool ausente| proposal["Propor nova tool"]
+    proposal --> draft["Gerar draft inativo"]
+    draft --> validation["Validar manifesto, schema e AST"]
+    validation --> review["Revisao e aprovacao do usuario"]
+    schema --> permissions["Expandir permissoes efetivas"]
+    permissions --> confirmation["Confirmacao"]
+    confirmation --> runner["Runner em subprocesso"]
+    runner --> output["Validar output schema"]
+    output --> audit["Auditoria JSONL"]
+```
+
+Lifecycle:
+
+```text
+draft -> validating -> validated -> approved -> installed -> enabled
+```
+
+Estados alternativos: `rejected`, `disabled` e `broken`.
+
+Uma tool gerada pelo Argos permanece como `draft` e nao pode ser executada. A aprovacao, instalacao e habilitacao sao etapas separadas.
+
+### Estrutura de uma tool
+
+```text
+minha-tool/
+├── tool.yaml
+├── handler.py
+├── requirements.lock
+└── tests/
+```
+
+O manifesto usa JSON Schema Draft 2020-12:
+
+```yaml
+schema_version: "1.0"
+name: local.exemplo
+version: "1.0.0"
+runtime:
+  type: python
+  python: ">=3.12,<3.13"
+  entrypoint: handler.py
+input_schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+output_schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+permissions:
+  filesystem:
+    read: []
+    write: []
+  network:
+    enabled: false
+    hosts: []
+  subprocess:
+    executables: []
+execution:
+  timeout_seconds: 60
+  max_output_bytes: 1048576
+```
+
+### Comandos de tools
+
+```bash
+argos tools list
+argos tools inspect local.spring.create_project
+argos tools validate caminho/para/tool
+argos tools register caminho/para/tool
+argos tools approve local.exemplo 1.0.0
+argos tools install caminho/para/tool
+argos tools enable local.exemplo 1.0.0
+argos tools disable local.exemplo 1.0.0
+argos tools generate definicao.json
+```
+
+Fluxo para uma tool criada pelo usuario:
+
+```text
+validate -> register -> approve -> install -> enable
+```
+
+Dependencias devem estar fixadas em `requirements.lock` com hashes SHA-256. A instalacao usa `--require-hashes` e `--only-binary :all:`.
+
+### Limites de seguranca
+
+O ambiente virtual isola dependencias, mas nao e uma sandbox. O MVP adiciona subprocesso separado, `shell=False`, timeout, ambiente filtrado, limite de output, validacao de schemas, permissoes declaradas, hashes e auditoria.
+
+Tools geradas ou nao aprovadas nao sao executadas. Uma evolucao futura deve usar Windows Job Objects e AppContainer ou Windows Sandbox para codigo nao confiavel.
+
+### Tool Spring Boot
+
+A tool bundled `local.spring.create_project` cria um projeto Maven ou Gradle sem rede e sem shell. O Argos coleta:
+
+- framework;
+- nome do projeto;
+- versao Java;
+- Maven ou Gradle;
+- group ID.
+
+Exemplo:
+
+```text
+argos: quero criar um app backend com java e estruturar os arquivos iniciais
+argos: vamos usar spring boot
+argos: pedidos-api
+argos: java 21
+argos: maven
+argos: com.example
+```
+
+Somente depois de todos os dados o Argos mostra a confirmacao e as permissoes efetivas.
 
 ## Seguranca
 
