@@ -1,5 +1,12 @@
 AUTO_EXECUTE = {"open_application", "open_file", "open_url"}
-CONFIRM = {"create_file", "search_files", "run_shell_command", "type_text", "write_file"}
+CONFIRM = {
+    "create_file",
+    "schedule_reminder",
+    "search_files",
+    "run_shell_command",
+    "type_text",
+    "write_file",
+}
 BLOCKED = {"delete_files", "shutdown_system"}
 
 

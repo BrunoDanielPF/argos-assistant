@@ -28,6 +28,7 @@ def build_default_registry(tool_catalog=None) -> CapabilityRegistry:
             Capability(name="open_file", description="Open a local file"),
             Capability(name="open_url", description="Open a URL in the browser"),
             Capability(name="search_files", description="Search files in a directory"),
+            Capability(name="schedule_reminder", description="Schedule a local reminder"),
             Capability(name="run_shell_command", description="Run a shell command"),
         ]
     if tool_catalog is not None:

@@ -1,7 +1,9 @@
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import os
 from pathlib import Path
 import subprocess
+from uuid import uuid4
 import webbrowser
 
 from assistant.tools.permissions import UnsafeToolPermission, expand_permissions
@@ -30,12 +32,14 @@ class ActionExecutor:
         open_file_fn=None,
         tool_catalog=None,
         tool_runner=None,
+        job_repository=None,
     ) -> None:
         self._open_url = open_url_fn or webbrowser.open
         self._open_application = open_application_fn or self._default_open_application
         self._open_file = open_file_fn or self._default_open_file
         self._tool_catalog = tool_catalog
         self._tool_runner = tool_runner
+        self._job_repository = job_repository
 
     def configure_tools(self, tool_catalog, tool_runner) -> None:
         self._tool_catalog = tool_catalog
@@ -149,6 +153,61 @@ class ActionExecutor:
                 ok=True,
                 message="\n".join(lines),
                 data={"matches": visible_matches, "all_count": len(matches)},
+            )
+
+        if capability_name == "schedule_reminder":
+            if self._job_repository is None:
+                return ExecutionResult(
+                    ok=False,
+                    message="Reminder scheduling is not configured",
+                )
+            content = args.get("content")
+            scheduled_for = args.get("scheduled_for")
+            session_id = args.get("session_id", "default")
+            if not isinstance(content, str) or not content.strip():
+                return ExecutionResult(
+                    ok=False,
+                    message="Missing content for schedule_reminder",
+                )
+            if not isinstance(scheduled_for, str) or not scheduled_for.strip():
+                return ExecutionResult(
+                    ok=False,
+                    message="Missing scheduled_for for schedule_reminder",
+                )
+            try:
+                due_at = datetime.fromisoformat(
+                    scheduled_for.replace("Z", "+00:00")
+                )
+            except ValueError:
+                return ExecutionResult(
+                    ok=False,
+                    message="Invalid scheduled_for for schedule_reminder",
+                )
+            if due_at.tzinfo is None:
+                due_at = due_at.replace(tzinfo=timezone.utc)
+            due_at = due_at.astimezone(timezone.utc)
+            if not isinstance(session_id, str) or not session_id.strip():
+                session_id = "default"
+            job = self._job_repository.create(
+                session_id=session_id,
+                run_id=str(uuid4()),
+                payload={
+                    "type": "reminder",
+                    "content": f"Lembrete: {content.strip()}",
+                },
+                scheduled_for=due_at,
+            )
+            return ExecutionResult(
+                ok=True,
+                message=(
+                    "Lembrete agendado para "
+                    f"{due_at.astimezone().strftime('%Y-%m-%d %H:%M:%S %Z')} "
+                    f"(job {job.job_id[:8]})."
+                ),
+                data={
+                    "job_id": job.job_id,
+                    "scheduled_for": due_at.isoformat(),
+                },
             )
 
         if self._tool_catalog is not None and self._tool_runner is not None:

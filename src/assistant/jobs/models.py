@@ -58,6 +58,7 @@ class JobRecord(BaseModel):
     run_id: str
     status: JobStatus
     payload: dict = Field(default_factory=dict)
+    scheduled_for: datetime | None = None
     created_at: datetime
     updated_at: datetime
     attempts: int = 0

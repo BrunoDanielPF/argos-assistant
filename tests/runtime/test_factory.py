@@ -16,6 +16,9 @@ def test_factory_builds_agent_with_provided_memory(monkeypatch, tmp_path):
             return []
 
     class FakeExecutor:
+        def __init__(self, *args, **kwargs):
+            pass
+
         def configure_tools(self, catalog, runner):
             self.catalog = catalog
             self.runner = runner
@@ -60,6 +63,9 @@ def test_factory_preserves_restored_session_context(monkeypatch, tmp_path):
             return []
 
     class FakeExecutor:
+        def __init__(self, *args, **kwargs):
+            pass
+
         def configure_tools(self, catalog, runner):
             pass
 

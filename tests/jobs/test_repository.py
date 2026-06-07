@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from assistant.jobs.models import JobStatus, InvalidJobTransition
@@ -87,4 +89,28 @@ def test_repository_records_failure_and_retry(tmp_path):
     assert failed.last_error == "modelo indisponivel"
     assert retried.status == JobStatus.QUEUED
     assert retried.last_error is None
+    repository.close()
+
+
+def test_repository_next_queued_respects_scheduled_for(tmp_path):
+    repository = JobRepository(tmp_path / "argos.db")
+    now = datetime.now(timezone.utc)
+    future = repository.create(
+        "default",
+        "run-future",
+        {"content": "futuro"},
+        scheduled_for=now + timedelta(minutes=10),
+    )
+    due = repository.create(
+        "default",
+        "run-due",
+        {"content": "agora"},
+        scheduled_for=now - timedelta(minutes=1),
+    )
+
+    next_job = repository.next_queued(now=now)
+
+    assert next_job is not None
+    assert next_job.job_id == due.job_id
+    assert repository.load(future.job_id).status == JobStatus.QUEUED
     repository.close()

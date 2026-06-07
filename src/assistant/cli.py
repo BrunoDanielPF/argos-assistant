@@ -409,17 +409,39 @@ def jobs_list(limit: int = 20) -> None:
         console.print(
             f"{job.job_id[:8]}  {job.status.value}  "
             f"session={job.session_id} attempts={job.attempts} "
+            f"scheduled={job.scheduled_for.isoformat() if job.scheduled_for else '-'} "
             f"updated={job.updated_at.isoformat()}"
         )
+
+
+def _load_job_by_id_or_prefix(repository: JobRepository, job_id: str):
+    job = repository.load(job_id)
+    if job is not None:
+        return job, None
+    if len(job_id) < 8:
+        return None, None
+    matches = [
+        candidate
+        for candidate in repository.list_recent(limit=500)
+        if candidate.job_id.startswith(job_id)
+    ]
+    if len(matches) == 1:
+        return matches[0], None
+    if len(matches) > 1:
+        return None, "ambiguous"
+    return None, None
 
 
 @jobs_app.command("show")
 def jobs_show(job_id: str) -> None:
     repository = build_job_repository()
     try:
-        job = repository.load(job_id)
+        job, lookup_error = _load_job_by_id_or_prefix(repository, job_id)
     finally:
         repository.close()
+    if lookup_error == "ambiguous":
+        console.print(f"Prefixo de job ambiguo: {job_id}")
+        raise typer.Exit(code=1)
     if job is None:
         console.print(f"Job nao encontrado: {job_id}")
         raise typer.Exit(code=1)
@@ -428,6 +450,8 @@ def jobs_show(job_id: str) -> None:
     console.print(f"run_id: {job.run_id}")
     console.print(f"status: {job.status.value}")
     console.print(f"attempts: {job.attempts}")
+    if job.scheduled_for:
+        console.print(f"scheduled_for: {job.scheduled_for.isoformat()}")
     console.print(f"created_at: {job.created_at.isoformat()}")
     console.print(f"updated_at: {job.updated_at.isoformat()}")
     if job.last_error:
@@ -440,8 +464,15 @@ def jobs_show(job_id: str) -> None:
 def jobs_retry(job_id: str) -> None:
     repository = build_job_repository()
     try:
+        existing, lookup_error = _load_job_by_id_or_prefix(repository, job_id)
+        if lookup_error == "ambiguous":
+            console.print(f"Prefixo de job ambiguo: {job_id}")
+            raise typer.Exit(code=1)
+        if existing is None:
+            console.print(f"Job nao encontrado: {job_id}")
+            raise typer.Exit(code=1)
         try:
-            job = repository.transition(job_id, JobStatus.QUEUED)
+            job = repository.transition(existing.job_id, JobStatus.QUEUED)
         except KeyError:
             console.print(f"Job nao encontrado: {job_id}")
             raise typer.Exit(code=1)
@@ -457,8 +488,15 @@ def jobs_retry(job_id: str) -> None:
 def jobs_cancel(job_id: str) -> None:
     repository = build_job_repository()
     try:
+        existing, lookup_error = _load_job_by_id_or_prefix(repository, job_id)
+        if lookup_error == "ambiguous":
+            console.print(f"Prefixo de job ambiguo: {job_id}")
+            raise typer.Exit(code=1)
+        if existing is None:
+            console.print(f"Job nao encontrado: {job_id}")
+            raise typer.Exit(code=1)
         try:
-            job = repository.transition(job_id, JobStatus.CANCELLED)
+            job = repository.transition(existing.job_id, JobStatus.CANCELLED)
         except KeyError:
             console.print(f"Job nao encontrado: {job_id}")
             raise typer.Exit(code=1)

@@ -76,6 +76,28 @@ proxima entrega da Fase 2.
 - confirmacao pausa em `waiting_confirmation`;
 - retry manual recoloca `failed` em `queued`.
 
+## Entrega 2.4: lembretes persistentes
+
+**Status:** concluida para agendamento persistente. A notificacao automatica
+residente fica para a proxima entrega da Fase 2.
+
+- Modify: `src/assistant/planner.py`
+- Modify: `src/assistant/execution/executor.py`
+- Modify: `src/assistant/jobs/repository.py`
+- Modify: `src/assistant/cli.py`
+- Test: `tests/test_planner.py`
+- Test: `tests/test_executor.py`
+- Test: `tests/jobs/test_repository.py`
+- Test: `tests/jobs/test_worker.py`
+
+**Criterios:**
+
+- "me lembre que daqui 10 minutos..." vira `schedule_reminder`;
+- lembretes exigem confirmacao antes de persistir;
+- jobs podem ter `scheduled_for`;
+- `next_queued` ignora jobs agendados para o futuro;
+- `argos jobs list` e `argos jobs show` exibem o horario agendado.
+
 ## Fora do escopo inicial
 
 - recorrencias complexas;

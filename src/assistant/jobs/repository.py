@@ -33,6 +33,7 @@ class JobRepository:
                     run_id TEXT NOT NULL,
                     status TEXT NOT NULL,
                     payload_json TEXT NOT NULL,
+                    scheduled_for TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     attempts INTEGER NOT NULL,
@@ -40,10 +41,24 @@ class JobRepository:
                 )
                 """
             )
+            existing_columns = {
+                row[1]
+                for row in self._connection.execute("PRAGMA table_info(jobs)").fetchall()
+            }
+            if "scheduled_for" not in existing_columns:
+                self._connection.execute(
+                    "ALTER TABLE jobs ADD COLUMN scheduled_for TEXT"
+                )
             self._connection.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_jobs_updated_at
                 ON jobs (updated_at DESC)
+                """
+            )
+            self._connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_jobs_status_schedule
+                ON jobs (status, scheduled_for, created_at)
                 """
             )
 
@@ -52,6 +67,7 @@ class JobRepository:
         session_id: str,
         run_id: str,
         payload: dict,
+        scheduled_for: datetime | None = None,
     ) -> JobRecord:
         now = datetime.now(timezone.utc)
         job_id = str(uuid4())
@@ -61,6 +77,7 @@ class JobRepository:
             run_id=run_id,
             status=JobStatus.QUEUED,
             payload=dict(payload),
+            scheduled_for=scheduled_for,
             created_at=now,
             updated_at=now,
         )
@@ -73,12 +90,13 @@ class JobRepository:
                     run_id,
                     status,
                     payload_json,
+                    scheduled_for,
                     created_at,
                     updated_at,
                     attempts,
                     last_error
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 self._serialize(record),
             )
@@ -88,7 +106,7 @@ class JobRepository:
         with self._lock:
             row = self._connection.execute(
                 """
-                SELECT job_id, session_id, run_id, status, payload_json,
+                SELECT job_id, session_id, run_id, status, payload_json, scheduled_for,
                        created_at, updated_at, attempts, last_error
                 FROM jobs
                 WHERE job_id = ?
@@ -105,7 +123,7 @@ class JobRepository:
         with self._lock:
             rows = self._connection.execute(
                 """
-                SELECT job_id, session_id, run_id, status, payload_json,
+                SELECT job_id, session_id, run_id, status, payload_json, scheduled_for,
                        created_at, updated_at, attempts, last_error
                 FROM jobs
                 ORDER BY updated_at DESC
@@ -115,18 +133,20 @@ class JobRepository:
             ).fetchall()
         return [self._deserialize(row) for row in rows]
 
-    def next_queued(self) -> JobRecord | None:
+    def next_queued(self, now: datetime | None = None) -> JobRecord | None:
+        now = now or datetime.now(timezone.utc)
         with self._lock:
             row = self._connection.execute(
                 """
-                SELECT job_id, session_id, run_id, status, payload_json,
+                SELECT job_id, session_id, run_id, status, payload_json, scheduled_for,
                        created_at, updated_at, attempts, last_error
                 FROM jobs
                 WHERE status = ?
-                ORDER BY created_at ASC
+                  AND (scheduled_for IS NULL OR scheduled_for <= ?)
+                ORDER BY COALESCE(scheduled_for, created_at) ASC, created_at ASC
                 LIMIT 1
                 """,
-                (JobStatus.QUEUED.value,),
+                (JobStatus.QUEUED.value, now.isoformat()),
             ).fetchone()
         if row is None:
             return None
@@ -141,7 +161,7 @@ class JobRepository:
         with self._lock, self._connection:
             row = self._connection.execute(
                 """
-                SELECT job_id, session_id, run_id, status, payload_json,
+                SELECT job_id, session_id, run_id, status, payload_json, scheduled_for,
                        created_at, updated_at, attempts, last_error
                 FROM jobs
                 WHERE job_id = ?
@@ -185,6 +205,7 @@ class JobRepository:
             record.run_id,
             record.status.value,
             json.dumps(record.payload, ensure_ascii=True),
+            record.scheduled_for.isoformat() if record.scheduled_for else None,
             record.created_at.isoformat(),
             record.updated_at.isoformat(),
             record.attempts,
@@ -199,8 +220,9 @@ class JobRepository:
             run_id=row[2],
             status=JobStatus(row[3]),
             payload=json.loads(row[4]),
-            created_at=datetime.fromisoformat(row[5]),
-            updated_at=datetime.fromisoformat(row[6]),
-            attempts=int(row[7]),
-            last_error=row[8],
+            scheduled_for=datetime.fromisoformat(row[5]) if row[5] else None,
+            created_at=datetime.fromisoformat(row[6]),
+            updated_at=datetime.fromisoformat(row[7]),
+            attempts=int(row[8]),
+            last_error=row[9],
         )

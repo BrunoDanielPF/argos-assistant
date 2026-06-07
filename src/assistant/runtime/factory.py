@@ -9,6 +9,7 @@ from assistant.agent import AssistantAgent
 from assistant.capabilities.registry import build_default_registry
 from assistant.config import AppConfig
 from assistant.execution.executor import ActionExecutor
+from assistant.jobs.repository import JobRepository
 from assistant.execution.policy import decide_policy
 from assistant.files.resolver import FileResolver
 from assistant.llm.ollama_client import OllamaClient
@@ -78,7 +79,9 @@ class RuntimeFactory:
                 for tool in tool_catalog.list_enabled()
             ],
         )
-        executor = ActionExecutor()
+        executor = ActionExecutor(
+            job_repository=JobRepository(self._config.database_file),
+        )
         if hasattr(executor, "configure_tools"):
             executor.configure_tools(
                 tool_catalog,

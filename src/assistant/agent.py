@@ -255,6 +255,19 @@ class AssistantAgent:
         )
 
     @staticmethod
+    def _inject_runtime_arguments(
+        capability_name: str,
+        arguments: dict,
+        context: dict,
+    ) -> dict:
+        if capability_name != "schedule_reminder":
+            return arguments
+        session_id = context.get("session_id")
+        if not isinstance(session_id, str) or not session_id.strip():
+            return arguments
+        return {**arguments, "session_id": session_id}
+
+    @staticmethod
     def _normalize_file_creation(
         capability_name: str,
         arguments: dict,
@@ -341,6 +354,11 @@ class AssistantAgent:
             if clarification_response is not None:
                 return clarification_response
             assert arguments is not None
+            arguments = self._inject_runtime_arguments(
+                capability_name,
+                arguments,
+                snapshot_context,
+            )
             validation_response = self._validate_action_response(
                 capability_name,
                 arguments,
@@ -380,6 +398,11 @@ class AssistantAgent:
                 if clarification_response is not None:
                     return clarification_response
                 assert arguments is not None
+                arguments = self._inject_runtime_arguments(
+                    capability_name,
+                    arguments,
+                    snapshot_context,
+                )
                 last_capability = capability_name
                 validation_response = self._validate_action_response(
                     capability_name,

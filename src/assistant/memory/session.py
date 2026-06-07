@@ -39,10 +39,13 @@ class SessionMemory:
 
     def set_context(
         self,
+        session_id: str | None = None,
         current_cwd: str | None = None,
         default_search_root: str | None = None,
         user_home: str | None = None,
     ) -> None:
+        if session_id is not None:
+            self._context.session_id = session_id
         if current_cwd is not None:
             self._context.current_cwd = current_cwd
         if default_search_root is not None:

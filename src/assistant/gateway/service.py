@@ -30,6 +30,7 @@ class GatewayService:
         lock = self._get_session_lock(request.session_id)
         with lock:
             agent = self._get_or_create_agent(request)
+            agent.memory.set_context(session_id=request.session_id)
             if request.cwd:
                 agent.memory.set_context(
                     current_cwd=request.cwd,

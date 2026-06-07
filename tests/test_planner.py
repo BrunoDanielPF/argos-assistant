@@ -381,9 +381,49 @@ def test_planner_handles_reminder_request_without_development_tool():
         "para iniciar a especificação de requisitos"
     )
 
-    assert plan["mode"] == "answer"
-    assert "lembrete" in plan["content"].lower()
-    assert "spring" not in plan["content"].lower()
+    assert plan["mode"] == "action"
+    assert plan["capability"] == "schedule_reminder"
+    assert plan["arguments"]["content"] == (
+        "precisamos criar um documento para iniciar a especificação de requisitos"
+    )
+    assert "scheduled_for" in plan["arguments"]
+
+
+def test_planner_asks_when_reminder_time_is_missing():
+    planner = Planner(llm_client=FailIfCalledClient())
+
+    plan = planner.create_plan("argos me lembre de revisar o documento")
+
+    assert plan["mode"] == "clarification"
+    assert plan["pending"]["field"] == "scheduled_for"
+    assert plan["pending"]["action"] == {
+        "capability": "schedule_reminder",
+        "arguments": {"content": "de revisar o documento"},
+    }
+
+
+def test_planner_resolves_reminder_time_clarification():
+    planner = Planner(llm_client=FailIfCalledClient())
+    pending = {
+        "field": "scheduled_for",
+        "question": "Quando devo te lembrar disso?",
+        "action": {
+            "capability": "schedule_reminder",
+            "arguments": {"content": "revisar o documento"},
+        },
+        "options": [],
+        "accept_free_text": True,
+    }
+
+    plan = planner.create_plan(
+        "daqui 10 minutos",
+        context={"pending_clarification": pending},
+    )
+
+    assert plan["mode"] == "action"
+    assert plan["capability"] == "schedule_reminder"
+    assert plan["arguments"]["content"] == "revisar o documento"
+    assert "scheduled_for" in plan["arguments"]
 
 
 def test_planner_sends_previous_conversation_to_model():

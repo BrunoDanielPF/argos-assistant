@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 from assistant.jobs.models import JobStatus
 from assistant.jobs.repository import JobRepository
 from assistant.jobs.worker import JobWorker
@@ -91,4 +93,23 @@ def test_worker_returns_none_when_no_queued_jobs(tmp_path):
     processed = JobWorker(repository, RecordingService(None)).run_once()
 
     assert processed is None
+    repository.close()
+
+
+def test_worker_does_not_execute_future_scheduled_job(tmp_path):
+    repository = JobRepository(tmp_path / "argos.db")
+    repository.create(
+        session_id="default",
+        run_id="run-1",
+        payload={"content": "lembrete"},
+        scheduled_for=datetime.now(timezone.utc) + timedelta(minutes=10),
+    )
+    service = RecordingService(
+        AgentResponse(session_id="default", run_id="run-1", ok=True, message="ok")
+    )
+
+    processed = JobWorker(repository, service).run_once()
+
+    assert processed is None
+    assert service.requests == []
     repository.close()

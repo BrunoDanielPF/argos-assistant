@@ -43,6 +43,23 @@ def test_cli_jobs_show_displays_details(monkeypatch, tmp_path):
     assert "abrir navegador" in result.stdout
 
 
+def test_cli_jobs_show_accepts_unique_prefix(monkeypatch, tmp_path):
+    database = tmp_path / "argos.db"
+    repository = JobRepository(database)
+    job = repository.create(
+        session_id="default",
+        run_id="run-1",
+        payload={"content": "abrir navegador"},
+    )
+    repository.close()
+    monkeypatch.setenv("ARGOS_DATABASE_FILE", str(database))
+
+    result = CliRunner().invoke(app, ["jobs", "show", job.job_id[:8]])
+
+    assert result.exit_code == 0
+    assert job.job_id in result.stdout
+
+
 def test_cli_jobs_show_reports_missing_job(monkeypatch, tmp_path):
     monkeypatch.setenv("ARGOS_DATABASE_FILE", str(tmp_path / "argos.db"))
 

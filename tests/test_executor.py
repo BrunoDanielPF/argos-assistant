@@ -1,4 +1,5 @@
 from assistant.execution.executor import ActionExecutor
+from assistant.jobs.repository import JobRepository
 
 
 def test_executor_opens_url_with_launcher(monkeypatch):
@@ -185,3 +186,40 @@ def test_executor_write_file_rejects_unknown_mode(tmp_path):
 
     assert result.ok is False
     assert target.read_text(encoding="utf-8") == "hello"
+
+
+def test_executor_schedules_reminder_job(tmp_path):
+    repository = JobRepository(tmp_path / "argos.db")
+
+    result = ActionExecutor(job_repository=repository).execute(
+        "schedule_reminder",
+        {
+            "session_id": "s1",
+            "content": "revisar documento",
+            "scheduled_for": "2026-06-07T12:00:00+00:00",
+        },
+    )
+
+    assert result.ok is True
+    job = repository.load(result.data["job_id"])
+    assert job is not None
+    assert job.session_id == "s1"
+    assert job.payload == {
+        "type": "reminder",
+        "content": "Lembrete: revisar documento",
+    }
+    assert job.scheduled_for.isoformat() == "2026-06-07T12:00:00+00:00"
+    repository.close()
+
+
+def test_executor_rejects_reminder_without_repository():
+    result = ActionExecutor().execute(
+        "schedule_reminder",
+        {
+            "content": "revisar documento",
+            "scheduled_for": "2026-06-07T12:00:00+00:00",
+        },
+    )
+
+    assert result.ok is False
+    assert "not configured" in result.message

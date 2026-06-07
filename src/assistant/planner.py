@@ -1,4 +1,5 @@
 from contextlib import nullcontext
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import re
@@ -259,15 +260,7 @@ class Planner:
         context = context or {}
 
         if any(term in lowered_input for term in ("me lembre", "lembrete", "lembrar daqui")):
-            return {
-                "mode": "answer",
-                "content": (
-                    "Ainda nao consigo agendar lembretes por horario nesta versao. "
-                    "A Fase 2 ja criou a base de jobs persistentes, mas o scheduler "
-                    "de lembretes ainda precisa ser conectado antes de eu prometer "
-                    "te avisar daqui alguns minutos."
-                ),
-            }
+            return self._heuristic_reminder_plan(normalized_input)
 
         if (
             "projeto" in lowered_input
@@ -379,6 +372,70 @@ class Planner:
 
         return None
 
+    def _heuristic_reminder_plan(self, user_input: str) -> dict:
+        normalized = self._normalize_text(user_input)
+        scheduled_for = self._parse_relative_due_time(normalized)
+        if scheduled_for is None:
+            pending = {
+                "field": "scheduled_for",
+                "question": "Quando devo te lembrar disso?",
+                "action": {
+                    "capability": "schedule_reminder",
+                    "arguments": {
+                        "content": self._extract_reminder_content(user_input),
+                    },
+                },
+                "options": [],
+                "accept_free_text": True,
+            }
+            return {
+                "mode": "clarification",
+                "question": self._format_clarification_question(pending),
+                "pending": pending,
+            }
+
+        return {
+            "mode": "action",
+            "capability": "schedule_reminder",
+            "arguments": {
+                "content": self._extract_reminder_content(user_input),
+                "scheduled_for": scheduled_for.isoformat(),
+            },
+        }
+
+    def _parse_relative_due_time(self, normalized_input: str) -> datetime | None:
+        delay_match = re.search(
+            r"\b(?:daqui|em)\s+(\d+)\s+"
+            r"(minuto|minutos|min|hora|horas|h)\b",
+            normalized_input,
+        )
+        if delay_match is None:
+            return None
+        quantity = int(delay_match.group(1))
+        unit = delay_match.group(2)
+        delta = (
+            timedelta(hours=quantity)
+            if unit in {"hora", "horas", "h"}
+            else timedelta(minutes=quantity)
+        )
+        return datetime.now(timezone.utc) + delta
+
+    def _extract_reminder_content(self, user_input: str) -> str:
+        content = user_input.strip()
+        content = re.sub(
+            r"^\s*(?:argos[, ]*)?(?:me\s+lembre\s+que|me\s+lembre|lembrete\s+para|lembrar\s+daqui)\s+",
+            "",
+            content,
+            flags=re.IGNORECASE,
+        ).strip()
+        content = re.sub(
+            r"\b(?:daqui|em)\s+\d+\s+(?:minuto|minutos|min|hora|horas|h)\b",
+            "",
+            content,
+            flags=re.IGNORECASE,
+        ).strip(" ,.;")
+        return content or user_input.strip()
+
     def _heuristic_file_edit_plan(
         self,
         normalized_input: str,
@@ -482,7 +539,19 @@ class Planner:
         if not isinstance(capability, str) or not isinstance(arguments, dict):
             raise PlannerError("Invalid pending clarification action")
         resolved_arguments = dict(arguments)
-        resolved_arguments[field] = selection
+        if capability == "schedule_reminder" and field == "scheduled_for":
+            scheduled_for = self._parse_relative_due_time(
+                self._normalize_text(str(selection))
+            )
+            if scheduled_for is None:
+                return {
+                    "mode": "clarification",
+                    "question": self._format_clarification_question(pending),
+                    "pending": pending,
+                }
+            resolved_arguments[field] = scheduled_for.isoformat()
+        else:
+            resolved_arguments[field] = selection
         remaining_questions = pending.get("remaining_questions")
         if isinstance(remaining_questions, list) and remaining_questions:
             next_question = dict(remaining_questions[0])

@@ -392,8 +392,10 @@ indisponivel, pois isso criaria uma sessao diferente.
 ### Jobs locais
 
 A Fase 2 iniciou a fundacao de jobs persistentes em SQLite. Nesta etapa, o
-Argos ja consegue registrar, consultar, cancelar e reenfileirar jobs; a
-execucao automatica em background sera conectada nas proximas entregas.
+Argos ja consegue registrar, consultar, cancelar e reenfileirar jobs. Pedidos
+simples de lembrete, como "me lembre que daqui 10 minutos...", viram jobs
+agendados com `scheduled_for`; a notificacao automatica em background sera
+conectada nas proximas entregas.
 
 ```bash
 argos jobs list
@@ -404,6 +406,27 @@ argos jobs cancel <job_id>
 
 Estados atuais: `queued`, `running`, `waiting_confirmation`, `succeeded`,
 `failed`, `cancelled` e `cancelling`.
+
+Teste manual de lembrete:
+
+```bash
+argos
+```
+
+No modo interativo:
+
+```text
+argos: argos me lembre que daqui 10 minutos precisamos criar um documento para iniciar a especificacao de requisitos
+Executar esta acao? [s/N]: s
+argos: exit
+```
+
+Depois confira o job persistido:
+
+```bash
+argos jobs list
+argos jobs show <job_id>
+```
 
 Configuracao minima opcional em `~/.argos/config.yaml`:
 
@@ -617,7 +640,7 @@ Argos separa raciocinio de execucao. O modelo local e o planner podem propor aco
 Classes de politica:
 
 - `allow`: acoes simples, como abrir URL, aplicativo conhecido ou arquivo
-- `confirm`: acoes sensiveis, como criar arquivo, busca de arquivos ou futuras operacoes shell
+- `confirm`: acoes sensiveis, como criar arquivo, agendar lembrete, busca de arquivos ou futuras operacoes shell
 - `blocked`: acoes destrutivas ou nao suportadas
 
 Skills, MCPs e prompts internos nao devem executar diretamente acoes na maquina. Qualquer acao local deve passar pelo mesmo fluxo de politica e confirmacao.

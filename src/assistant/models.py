@@ -20,6 +20,7 @@ class AuditEvent(BaseModel):
 
 
 class SessionContext(BaseModel):
+    session_id: str | None = None
     current_cwd: str | None = None
     default_search_root: str | None = None
     user_home: str | None = None
