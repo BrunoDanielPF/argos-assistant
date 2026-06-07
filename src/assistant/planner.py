@@ -258,6 +258,17 @@ class Planner:
         lowered_input = normalized_input.lower()
         context = context or {}
 
+        if any(term in lowered_input for term in ("me lembre", "lembrete", "lembrar daqui")):
+            return {
+                "mode": "answer",
+                "content": (
+                    "Ainda nao consigo agendar lembretes por horario nesta versao. "
+                    "A Fase 2 ja criou a base de jobs persistentes, mas o scheduler "
+                    "de lembretes ainda precisa ser conectado antes de eu prometer "
+                    "te avisar daqui alguns minutos."
+                ),
+            }
+
         if (
             "projeto" in lowered_input
             and any(term in lowered_input for term in ("comecar", "começar", "desenvolver"))
@@ -274,9 +285,19 @@ class Planner:
                 ),
             }
 
-        spring_plan = self._heuristic_spring_project_plan(lowered_input, context)
-        if spring_plan is not None:
-            return spring_plan
+        if (
+            any(term in lowered_input for term in ("projeto", "app", "aplicativo", "backend", "frontend"))
+            and any(term in lowered_input for term in ("criar", "desenvolver", "estruturar", "arquivos iniciais"))
+        ):
+            return {
+                "mode": "answer",
+                "content": (
+                    "Posso ajudar a planejar a arquitetura, pastas e checklist do projeto. "
+                    "Para criar arquivos automaticamente, essa capacidade deve vir de uma "
+                    "tool ou skill do usuario registrada no Argos; o core nao traz mais "
+                    "templates especificos de framework."
+                ),
+            }
 
         edit_plan = self._heuristic_file_edit_plan(normalized_input, lowered_input)
         if edit_plan is not None:
@@ -357,84 +378,6 @@ class Planner:
                 }
 
         return None
-
-    def _heuristic_spring_project_plan(
-        self,
-        lowered_input: str,
-        context: dict,
-    ) -> dict | None:
-        project_terms = ("projeto", "app", "aplicativo", "backend")
-        wants_project = any(term in lowered_input for term in project_terms)
-        wants_java = "java" in lowered_input
-        wants_structure = any(
-            term in lowered_input
-            for term in ("criar", "desenvolver", "estruturar", "arquivos iniciais")
-        )
-        if not (wants_project and wants_java and wants_structure):
-            return None
-
-        questions = []
-        if "spring" not in lowered_input:
-            questions.append(
-                {
-                    "field": "_framework",
-                    "question": "Qual framework Java voce quer usar?",
-                    "options": [
-                        {"id": "spring_boot", "label": "Spring Boot"},
-                        {"id": "cancel", "label": "cancelar"},
-                    ],
-                }
-            )
-        questions.extend(
-            [
-                {
-                    "field": "name",
-                    "question": "Qual deve ser o nome do projeto?",
-                    "options": [{"id": "cancel", "label": "cancelar"}],
-                    "accept_free_text": True,
-                },
-                {
-                    "field": "java_version",
-                    "question": "Qual versao do Java devemos usar?",
-                    "options": [
-                        {"id": 21, "label": "Java 21"},
-                        {"id": 17, "label": "Java 17"},
-                        {"id": "cancel", "label": "cancelar"},
-                    ],
-                },
-                {
-                    "field": "build_tool",
-                    "question": "Qual ferramenta de build devemos usar?",
-                    "options": [
-                        {"id": "maven", "label": "Maven"},
-                        {"id": "gradle", "label": "Gradle"},
-                        {"id": "cancel", "label": "cancelar"},
-                    ],
-                },
-                {
-                    "field": "group_id",
-                    "question": "Qual group ID devemos usar? Exemplo: com.example",
-                    "options": [{"id": "cancel", "label": "cancelar"}],
-                    "accept_free_text": True,
-                },
-            ]
-        )
-        first = questions.pop(0)
-        pending = {
-            **first,
-            "action": {
-                "capability": "local.spring.create_project",
-                "arguments": {
-                    "directory": context.get("user_home") or str(Path.home()),
-                },
-            },
-            "remaining_questions": questions,
-        }
-        return {
-            "mode": "clarification",
-            "question": self._format_clarification_question(pending),
-            "pending": pending,
-        }
 
     def _heuristic_file_edit_plan(
         self,

@@ -490,24 +490,23 @@ def test_confirm_action_returns_false_without_tty(monkeypatch):
     assert result is False
 
 
-def test_cli_tools_list_shows_bundled_tool(monkeypatch):
+def test_cli_tools_list_does_not_show_specific_development_template(monkeypatch):
     from assistant.cli import app
 
     runner = CliRunner()
     result = runner.invoke(app, ["tools", "list"])
 
     assert result.exit_code == 0
-    assert "local.spring.create_project" in result.stdout
+    assert "local.spring.create_project" not in result.stdout
 
 
-def test_cli_tools_inspect_shows_schema():
+def test_cli_tools_inspect_reports_removed_specific_development_template():
     runner = CliRunner()
 
     result = runner.invoke(app, ["tools", "inspect", "local.spring.create_project"])
 
-    assert result.exit_code == 0
-    assert "java_version" in result.stdout
-    assert "filesystem" in result.stdout
+    assert result.exit_code == 1
+    assert "Tool nao encontrada" in result.stdout
 
 
 def test_cli_tools_help_lists_lifecycle_commands():

@@ -88,7 +88,7 @@ def test_planner_uses_tool_free_fallback_when_clarification_persists():
                     "response": (
                         '{"mode":"clarification","question":"Qual contexto?",'
                         '"pending":{"field":"context","action":'
-                        '{"capability":"local.spring.create_project","arguments":{}},'
+                        '{"capability":"user.project_scaffold","arguments":{}},'
                         '"options":[{"id":"food","label":"comida"}]}}'
                     )
                 }
@@ -104,8 +104,8 @@ def test_planner_uses_tool_free_fallback_when_clarification_persists():
         llm_client=client,
         tool_definitions=[
             {
-                "name": "local.spring.create_project",
-                "description": "Cria projeto Spring.",
+                "name": "user.project_scaffold",
+                "description": "Cria projeto definido pelo usuario.",
                 "input_schema": {"type": "object"},
             }
         ],
@@ -334,8 +334,8 @@ def test_planner_includes_dynamic_tool_schema_in_system_prompt():
         llm_client=llm_client,
         tool_definitions=[
             {
-                "name": "local.spring.create_project",
-                "description": "Cria um projeto Spring Boot.",
+                "name": "user.project_scaffold",
+                "description": "Cria um projeto definido pelo usuario.",
                 "input_schema": {
                     "type": "object",
                     "required": ["name", "directory"],
@@ -347,11 +347,11 @@ def test_planner_includes_dynamic_tool_schema_in_system_prompt():
     planner.create_plan("crie um backend")
 
     system_prompt = llm_client.messages[0]["content"]
-    assert "local.spring.create_project" in system_prompt
+    assert "user.project_scaffold" in system_prompt
     assert '"required": ["name", "directory"]' in system_prompt
 
 
-def test_planner_starts_spring_project_workflow_for_java_backend(tmp_path):
+def test_planner_keeps_specific_development_template_as_guidance_without_tool(tmp_path):
     planner = Planner(llm_client=FailIfCalledClient())
 
     plan = planner.create_plan(
@@ -359,9 +359,9 @@ def test_planner_starts_spring_project_workflow_for_java_backend(tmp_path):
         context={"user_home": str(tmp_path)},
     )
 
-    assert plan["mode"] == "clarification"
-    assert plan["pending"]["field"] == "_framework"
-    assert plan["pending"]["action"]["capability"] == "local.spring.create_project"
+    assert plan["mode"] == "answer"
+    assert "tool" in plan["content"].lower()
+    assert "spring" not in plan["content"].lower()
 
 
 def test_planner_keeps_generic_project_opening_non_executable():
@@ -373,46 +373,17 @@ def test_planner_keeps_generic_project_opening_non_executable():
     assert "tipo de projeto" in plan["content"].lower()
 
 
-def test_planner_continues_spring_workflow_after_framework_answer(tmp_path):
+def test_planner_handles_reminder_request_without_development_tool():
     planner = Planner(llm_client=FailIfCalledClient())
-    first = planner.create_plan(
-        "quero criar um app backend com java, me ajude estruturando os arquivos iniciais",
-        context={"user_home": str(tmp_path)},
-    )
 
-    second = planner.create_plan(
-        "vamos usar spring boot",
-        context={"pending_clarification": first["pending"]},
-    )
-
-    assert second["mode"] == "clarification"
-    assert second["pending"]["field"] == "name"
-    assert "nome" in second["question"].lower()
-
-
-def test_planner_completes_spring_workflow_with_natural_answers(tmp_path):
-    planner = Planner(llm_client=FailIfCalledClient())
     plan = planner.create_plan(
-        "quero criar um backend java com spring boot",
-        context={"user_home": str(tmp_path)},
+        "argos me lembre que daqui 10 minutos precisamos criar um documento "
+        "para iniciar a especificação de requisitos"
     )
-    for answer in ("pedidos-api", "java 21", "maven", "com.example"):
-        plan = planner.create_plan(
-            answer,
-            context={"pending_clarification": plan["pending"]},
-        )
 
-    assert plan == {
-        "mode": "action",
-        "capability": "local.spring.create_project",
-        "arguments": {
-            "name": "pedidos-api",
-            "directory": str(tmp_path),
-            "java_version": 21,
-            "build_tool": "maven",
-            "group_id": "com.example",
-        },
-    }
+    assert plan["mode"] == "answer"
+    assert "lembrete" in plan["content"].lower()
+    assert "spring" not in plan["content"].lower()
 
 
 def test_planner_sends_previous_conversation_to_model():

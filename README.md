@@ -48,7 +48,7 @@ O MVP atual entrega:
 - Tool SDK com manifesto, schemas, lifecycle e catalogo dinamico
 - execucao de tools aprovadas por protocolo JSON em subprocesso
 - geracao de drafts de tools sem instalacao ou execucao automatica
-- tool bundled para criar projetos Spring Boot
+- capabilities especificas devem ser adicionadas pelo usuario via tools ou skills
 
 ## Arquitetura
 
@@ -586,7 +586,7 @@ execution:
 
 ```bash
 argos tools list
-argos tools inspect local.spring.create_project
+argos tools inspect local.exemplo
 argos tools validate caminho/para/tool
 argos tools register caminho/para/tool
 argos tools approve local.exemplo 1.0.0
@@ -609,29 +609,6 @@ Dependencias devem estar fixadas em `requirements.lock` com hashes SHA-256. A in
 O ambiente virtual isola dependencias, mas nao e uma sandbox. O MVP adiciona subprocesso separado, `shell=False`, timeout, ambiente filtrado, limite de output, validacao de schemas, permissoes declaradas, hashes e auditoria.
 
 Tools geradas ou nao aprovadas nao sao executadas. Uma evolucao futura deve usar Windows Job Objects e AppContainer ou Windows Sandbox para codigo nao confiavel.
-
-### Tool Spring Boot
-
-A tool bundled `local.spring.create_project` cria um projeto Maven ou Gradle sem rede e sem shell. O Argos coleta:
-
-- framework;
-- nome do projeto;
-- versao Java;
-- Maven ou Gradle;
-- group ID.
-
-Exemplo:
-
-```text
-argos: quero criar um app backend com java e estruturar os arquivos iniciais
-argos: vamos usar spring boot
-argos: pedidos-api
-argos: java 21
-argos: maven
-argos: com.example
-```
-
-Somente depois de todos os dados o Argos mostra a confirmacao e as permissoes efetivas.
 
 ## Seguranca
 

@@ -392,7 +392,7 @@ def test_agent_drops_pending_clarification_when_user_changes_subject():
             "field": "project_type",
             "question": "Qual tipo de projeto?",
             "action": {
-                "capability": "local.spring.create_project",
+                "capability": "user.project_scaffold",
                 "arguments": {"project_type": "web"},
             },
             "options": [

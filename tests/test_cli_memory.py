@@ -56,6 +56,35 @@ def test_cli_lembre_que_uses_memory_flow_without_calling_agent(monkeypatch, tmp_
     assert "uso Windows" in (Path(tmp_path) / "correcoes.md").read_text(encoding="utf-8")
 
 
+def test_cli_time_based_lembre_que_goes_to_agent_instead_of_memory(monkeypatch, tmp_path):
+    monkeypatch.setenv("ARGOS_MEMORY_DIR", str(tmp_path))
+    handled = []
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self.memory = None
+
+        def handle(self, user_input: str) -> dict:
+            handled.append(user_input)
+            return {
+                "ok": True,
+                "message": "Ainda nao consigo agendar lembretes por horario.",
+                "suggestions": [{"text": "Ask me for the next step"}],
+            }
+
+    monkeypatch.setattr("assistant.cli.build_agent", lambda confirmer=None: FakeAgent())
+
+    result = CliRunner().invoke(
+        app,
+        ["interactive", "--direct"],
+        input="lembre que daqui 10 minutos criar documento\nexit\n",
+    )
+
+    assert result.exit_code == 0
+    assert handled == ["lembre que daqui 10 minutos criar documento"]
+    assert not (Path(tmp_path) / "correcoes.md").exists()
+
+
 def test_cli_memory_command_lists_persistent_memories(monkeypatch, tmp_path):
     monkeypatch.setenv("ARGOS_MEMORY_DIR", str(tmp_path))
     (tmp_path / "correcoes.md").write_text(

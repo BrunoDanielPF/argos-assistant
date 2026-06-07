@@ -163,9 +163,22 @@ def resolve_open_target(agent, target: str) -> str:
 def extract_memory_learning(prompt: str) -> str | None:
     normalized = prompt.strip()
     lowered = normalized.lower()
+    reminder_markers = (
+        "daqui ",
+        "em ",
+        "às ",
+        " as ",
+        "amanha",
+        "amanhã",
+        "hoje",
+        "minuto",
+        "hora",
+    )
     prefixes = ("lembre que ", "aprenda que ", "remember that ")
     for prefix in prefixes:
         if lowered.startswith(prefix):
+            if any(marker in lowered for marker in reminder_markers):
+                return None
             return normalized[len(prefix):].strip()
     if lowered.startswith("corrigindo:"):
         return normalized.split(":", 1)[1].strip()
