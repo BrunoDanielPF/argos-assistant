@@ -32,6 +32,8 @@ stateDiagram-v2
 
 ## Entrega 2.1: fundacao de jobs
 
+**Status:** concluida.
+
 - Create: `src/assistant/jobs/models.py`
 - Create: `src/assistant/jobs/repository.py`
 - Test: `tests/jobs/test_repository.py`
@@ -45,6 +47,8 @@ stateDiagram-v2
 
 ## Entrega 2.2: CLI de consulta
 
+**Status:** concluida.
+
 - Modify: `src/assistant/cli.py`
 - Test: `tests/jobs/test_cli.py`
 
@@ -52,9 +56,14 @@ stateDiagram-v2
 
 - `argos jobs list` mostra jobs recentes;
 - `argos jobs show <id>` mostra status, timestamps e erro seguro;
+- `argos jobs retry <id>` recoloca jobs com falha na fila;
+- `argos jobs cancel <id>` cancela jobs ainda nao terminais;
 - nenhum comando executa trabalho em background ainda.
 
 ## Entrega 2.3: worker simples
+
+**Status:** fundacao concluida. Integracao automatica com o gateway fica para a
+proxima entrega da Fase 2.
 
 - Create: `src/assistant/jobs/worker.py`
 - Modify: `src/assistant/gateway/service.py`

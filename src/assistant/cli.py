@@ -11,6 +11,8 @@ from assistant.agent import AssistantAgent
 from assistant.config import AppConfig
 from assistant.gateway.client import GatewayClient, GatewayError, GatewayUnavailable
 from assistant.gateway.process import GatewayProcessManager
+from assistant.jobs.models import InvalidJobTransition, JobStatus
+from assistant.jobs.repository import JobRepository
 from assistant.memory.long_term import LongTermMemoryStore
 from assistant.runtime.factory import RuntimeFactory
 from assistant.tools.catalog import ToolCatalog
@@ -27,7 +29,9 @@ CLI_DESCRIPTION = f"{ASSISTANT_NAME} Local AI Assistant"
 
 app = typer.Typer(help=CLI_DESCRIPTION)
 tools_app = typer.Typer(help="Gerenciar tools do Argos")
+jobs_app = typer.Typer(help="Consultar jobs do Argos")
 app.add_typer(tools_app, name="tools")
+app.add_typer(jobs_app, name="jobs")
 console = Console()
 
 
@@ -218,6 +222,10 @@ def build_gateway_client() -> GatewayClient:
     return GatewayClient(AppConfig.load())
 
 
+def build_job_repository() -> JobRepository:
+    return JobRepository(AppConfig.load().database_file)
+
+
 def build_gateway_agent(session_id: str) -> GatewayAgentAdapter:
     return GatewayAgentAdapter(build_gateway_client(), session_id)
 
@@ -372,6 +380,81 @@ def tools_generate(definition: str) -> None:
         f"[OK] Draft criado em {draft.path} com estado {draft.state}. "
         "Ele nao esta instalado nem habilitado."
     )
+
+
+@jobs_app.command("list")
+def jobs_list(limit: int = 20) -> None:
+    repository = build_job_repository()
+    try:
+        jobs = repository.list_recent(limit=limit)
+    finally:
+        repository.close()
+    if not jobs:
+        console.print("Nenhum job encontrado.")
+        return
+    for job in jobs:
+        console.print(
+            f"{job.job_id[:8]}  {job.status.value}  "
+            f"session={job.session_id} attempts={job.attempts} "
+            f"updated={job.updated_at.isoformat()}"
+        )
+
+
+@jobs_app.command("show")
+def jobs_show(job_id: str) -> None:
+    repository = build_job_repository()
+    try:
+        job = repository.load(job_id)
+    finally:
+        repository.close()
+    if job is None:
+        console.print(f"Job nao encontrado: {job_id}")
+        raise typer.Exit(code=1)
+    console.print(f"job_id: {job.job_id}")
+    console.print(f"session_id: {job.session_id}")
+    console.print(f"run_id: {job.run_id}")
+    console.print(f"status: {job.status.value}")
+    console.print(f"attempts: {job.attempts}")
+    console.print(f"created_at: {job.created_at.isoformat()}")
+    console.print(f"updated_at: {job.updated_at.isoformat()}")
+    if job.last_error:
+        console.print(f"last_error: {job.last_error}")
+    console.print("payload:")
+    console.print(json.dumps(job.payload, ensure_ascii=False, indent=2))
+
+
+@jobs_app.command("retry")
+def jobs_retry(job_id: str) -> None:
+    repository = build_job_repository()
+    try:
+        try:
+            job = repository.transition(job_id, JobStatus.QUEUED)
+        except KeyError:
+            console.print(f"Job nao encontrado: {job_id}")
+            raise typer.Exit(code=1)
+        except InvalidJobTransition as exc:
+            console.print(f"Nao foi possivel reenfileirar job: {exc}")
+            raise typer.Exit(code=1)
+    finally:
+        repository.close()
+    console.print(f"[OK] Job {job.job_id} status={job.status.value}")
+
+
+@jobs_app.command("cancel")
+def jobs_cancel(job_id: str) -> None:
+    repository = build_job_repository()
+    try:
+        try:
+            job = repository.transition(job_id, JobStatus.CANCELLED)
+        except KeyError:
+            console.print(f"Job nao encontrado: {job_id}")
+            raise typer.Exit(code=1)
+        except InvalidJobTransition as exc:
+            console.print(f"Nao foi possivel cancelar job: {exc}")
+            raise typer.Exit(code=1)
+    finally:
+        repository.close()
+    console.print(f"[OK] Job {job.job_id} status={job.status.value}")
 
 
 def run_interactive_session(

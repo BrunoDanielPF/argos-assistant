@@ -389,6 +389,22 @@ argos interactive --direct
 O Argos nao troca silenciosamente para o modo direto quando o gateway esta
 indisponivel, pois isso criaria uma sessao diferente.
 
+### Jobs locais
+
+A Fase 2 iniciou a fundacao de jobs persistentes em SQLite. Nesta etapa, o
+Argos ja consegue registrar, consultar, cancelar e reenfileirar jobs; a
+execucao automatica em background sera conectada nas proximas entregas.
+
+```bash
+argos jobs list
+argos jobs show <job_id>
+argos jobs retry <job_id>
+argos jobs cancel <job_id>
+```
+
+Estados atuais: `queued`, `running`, `waiting_confirmation`, `succeeded`,
+`failed`, `cancelled` e `cancelling`.
+
 Configuracao minima opcional em `~/.argos/config.yaml`:
 
 ```yaml
