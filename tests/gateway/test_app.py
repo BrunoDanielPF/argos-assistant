@@ -138,6 +138,52 @@ def test_internal_error_returns_safe_message_and_run_id(tmp_path):
     repository.close()
 
 
+def test_internal_error_writes_safe_diagnostic_event(tmp_path):
+    from assistant.gateway.service import GatewayService
+    from assistant.observability.events import EventLog
+    from assistant.runtime.contracts import AgentRequest
+
+    class FailingAgent:
+        def __init__(self):
+            self.memory = type(
+                "Memory",
+                (),
+                {"set_context": lambda self, **kwargs: None},
+            )()
+
+        def handle(self, content):
+            raise RuntimeError("segredo interno do stack")
+
+    class FailingFactory:
+        def build_agent(self, memory=None):
+            return FailingAgent()
+
+    event_path = tmp_path / "events.jsonl"
+    repository = SessionRepository(tmp_path / "argos.db")
+    service = GatewayService(
+        FailingFactory(),
+        repository,
+        event_log=EventLog(event_path),
+    )
+
+    try:
+        service.handle(
+            AgentRequest(
+                session_id="default",
+                run_id="run-error",
+                content="conteudo privado",
+            )
+        )
+    except RuntimeError:
+        pass
+
+    payload = event_path.read_text(encoding="utf-8")
+    assert "RuntimeError" in payload
+    assert "segredo interno do stack" not in payload
+    assert "conteudo privado" not in payload
+    repository.close()
+
+
 def test_confirmation_endpoint_resumes_action(tmp_path):
     client, token, repository = build_client(tmp_path)
 

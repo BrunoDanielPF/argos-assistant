@@ -102,3 +102,42 @@ def test_agent_completes_spring_project_workflow_with_tool(tmp_path):
     assert result["ok"] is True
     assert (tmp_path / "pedidos-api" / "pom.xml").exists()
     assert confirmations[0][0] == "local.spring.create_project"
+
+
+def test_agent_asks_for_details_before_confirming_invalid_tool_arguments(tmp_path):
+    catalog = bundled_catalog(tmp_path)
+    confirmations = []
+
+    class InvalidToolPlanner:
+        def create_plan(self, user_input, context=None):
+            return {
+                "mode": "action",
+                "capability": "local.spring.create_project",
+                "arguments": {"project_type": "web"},
+            }
+
+    agent = AssistantAgent(
+        planner=InvalidToolPlanner(),
+        executor=ActionExecutor(
+            tool_catalog=catalog,
+            tool_runner=ToolRunner(python_executable=sys.executable),
+        ),
+        policy_decider=lambda capability: (
+            "confirm" if catalog.get_enabled(capability) else "blocked"
+        ),
+        confirmer=lambda capability, arguments: confirmations.append(
+            (capability, arguments)
+        )
+        or True,
+        action_validator=lambda capability, arguments: (
+            "Faltam dados para executar local.spring.create_project: name, directory, java_version, build_tool, group_id."
+            if capability == "local.spring.create_project"
+            else None
+        ),
+    )
+
+    response = agent.handle("vamos criar um aplicativo mobile")
+
+    assert response["ok"] is True
+    assert "faltam dados" in response["message"].lower()
+    assert confirmations == []

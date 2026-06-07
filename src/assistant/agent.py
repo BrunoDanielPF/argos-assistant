@@ -17,6 +17,7 @@ class AssistantAgent:
         memory: SessionMemory | None = None,
         long_term_memory=None,
         policy_decider: Callable[[str], str] | None = None,
+        action_validator: Callable[[str, dict], str | None] | None = None,
         confirmer: Callable[[str, dict], bool] | None = None,
         file_resolver: FileResolver | None = None,
     ) -> None:
@@ -25,6 +26,7 @@ class AssistantAgent:
         self._memory = memory or SessionMemory()
         self._long_term_memory = long_term_memory
         self._policy_decider = policy_decider or decide_policy
+        self._action_validator = action_validator or (lambda capability, arguments: None)
         self._confirmer = confirmer
         self._file_resolver = file_resolver or FileResolver()
 
@@ -237,6 +239,21 @@ class AssistantAgent:
         response = self._build_clarification_response("\n".join(question_lines), pending)
         return None, response
 
+    def _validate_action_response(
+        self,
+        capability_name: str,
+        arguments: dict,
+    ) -> dict | None:
+        validation_message = self._action_validator(capability_name, arguments)
+        if validation_message is None:
+            return None
+        return self._build_response(
+            ok=True,
+            message=validation_message,
+            capability_name=capability_name,
+            reason="invalid_arguments",
+        )
+
     @staticmethod
     def _normalize_file_creation(
         capability_name: str,
@@ -259,10 +276,32 @@ class AssistantAgent:
             return "create_file", normalized
         return capability_name, arguments
 
+    @staticmethod
+    def _is_subject_reset_request(user_input: str) -> bool:
+        normalized = user_input.strip().lower()
+        reset_markers = (
+            "esquece",
+            "cancela isso",
+            "cancelar isso",
+            "muda de assunto",
+            "troca de assunto",
+            "deixa isso",
+            "deixa pra la",
+            "deixa para la",
+            "agora quero",
+            "na verdade",
+        )
+        return any(marker in normalized for marker in reset_markers)
+
     def handle(self, user_input: str) -> dict:
         snapshot = self._memory.snapshot()
         previous_history = snapshot.get("history", [])
         snapshot_context = dict(snapshot.get("context") or {})
+        subject_was_reset = self._is_subject_reset_request(user_input)
+        if subject_was_reset:
+            self._memory.clear_pending_clarification()
+            snapshot_context["pending_clarification"] = None
+            previous_history = []
         self._memory.add_user_message(user_input)
         planner_params = inspect.signature(self._planner.create_plan).parameters
         if "context" in planner_params:
@@ -302,6 +341,12 @@ class AssistantAgent:
             if clarification_response is not None:
                 return clarification_response
             assert arguments is not None
+            validation_response = self._validate_action_response(
+                capability_name,
+                arguments,
+            )
+            if validation_response is not None:
+                return validation_response
             result = self._execute_action(capability_name, arguments)
             if getattr(result, "confirmation_required", False):
                 return self._build_confirmation_response(
@@ -336,6 +381,12 @@ class AssistantAgent:
                     return clarification_response
                 assert arguments is not None
                 last_capability = capability_name
+                validation_response = self._validate_action_response(
+                    capability_name,
+                    arguments,
+                )
+                if validation_response is not None:
+                    return validation_response
                 result = self._execute_action(capability_name, arguments)
                 if getattr(result, "confirmation_required", False):
                     return self._build_confirmation_response(

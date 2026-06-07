@@ -790,7 +790,12 @@ class Planner:
                 raise PlannerError("Planner clarification pending field must be a string")
             if not isinstance(action, dict):
                 raise PlannerError("Planner clarification pending action must be an object")
-            if not isinstance(options, list) or not options:
+            if options is None:
+                pending = {**pending, "options": [], "accept_free_text": True}
+                options = pending["options"]
+            if not isinstance(options, list) or (
+                not options and pending.get("accept_free_text") is not True
+            ):
                 raise PlannerError("Planner clarification pending options must be a non-empty list")
             return {
                 "mode": "clarification",

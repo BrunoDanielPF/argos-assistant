@@ -375,6 +375,50 @@ def test_agent_stores_planner_clarification_in_session():
     assert agent.memory.snapshot()["context"]["pending_clarification"] == pending
 
 
+def test_agent_drops_pending_clarification_when_user_changes_subject():
+    calls = []
+
+    class ContextPlanner:
+        def create_plan(self, user_input: str, context: dict | None = None) -> dict:
+            calls.append((user_input, context))
+            return {
+                "mode": "answer",
+                "content": "Vamos planejar a trilha de domingo.",
+            }
+
+    memory = SessionMemory()
+    memory.set_pending_clarification(
+        {
+            "field": "project_type",
+            "question": "Qual tipo de projeto?",
+            "action": {
+                "capability": "local.spring.create_project",
+                "arguments": {"project_type": "web"},
+            },
+            "options": [
+                {"id": "web", "label": "Web"},
+                {"id": "mobile", "label": "Mobile"},
+            ],
+        }
+    )
+
+    agent = AssistantAgent(
+        planner=ContextPlanner(),
+        executor=FakeExecutor(),
+        memory=memory,
+    )
+
+    response = agent.handle(
+        "esquece, quero me ajude a como planejar fazer uma trilha em um domingo"
+    )
+
+    assert response["ok"] is True
+    assert "trilha" in response["message"].lower()
+    assert calls[0][1]["pending_clarification"] is None
+    assert calls[0][1]["conversation_history"] == []
+    assert agent.memory.snapshot()["context"]["pending_clarification"] is None
+
+
 def test_agent_resolves_file_before_confirmation_and_completes_natural_clarification(tmp_path):
     target = tmp_path / "hello_world.md"
     target.write_text("hello world", encoding="utf-8")

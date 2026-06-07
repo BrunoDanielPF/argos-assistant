@@ -176,9 +176,62 @@ flowchart LR
 
 ---
 
+### Fase 1.5: contexto confiavel e recuperacao de erro
+
+**Objetivo:** estabilizar persistencia de contexto antes de permitir jobs
+assincronos, evitando que uma intencao antiga seja executada quando o usuario
+mudou de assunto.
+
+**Entregas:**
+
+- `active_task` persistido no contexto da sessao;
+- limpeza explicita de tarefa pendente quando o usuario usa marcadores como
+  `esquece`, `muda de assunto`, `agora quero` ou equivalentes;
+- clarificacoes do modelo sem `options` normalizadas para resposta livre;
+- validacao de argumentos de tools antes da confirmacao;
+- eventos de erro com `exception_type` e `run_id`, sem prompt, conteudo ou
+  stack privado;
+- comando `argos logs` tolerante a caracteres invalidos no terminal Windows.
+
+**Valor aplicado:**
+
+- reduz execucoes acidentais causadas por contexto antigo;
+- impede HTTP 500 por clarificacao incompleta do modelo local;
+- melhora diagnostico sem vazar dados sensiveis;
+- prepara a base para checkpoints e jobs duraveis da Fase 2.
+
+**Arquivos previstos:**
+
+- Modify: `src/assistant/agent.py`
+- Modify: `src/assistant/planner.py`
+- Modify: `src/assistant/models.py`
+- Modify: `src/assistant/memory/session.py`
+- Modify: `src/assistant/runtime/factory.py`
+- Modify: `src/assistant/gateway/service.py`
+- Modify: `src/assistant/cli.py`
+- Test: `tests/test_agent.py`
+- Test: `tests/test_planner.py`
+- Test: `tests/gateway/test_app.py`
+- Test: `tests/tools/test_integration.py`
+
+**Criterios de aceite:**
+
+- mudar de assunto limpa a pendencia anterior;
+- uma clarificacao sem opcoes nao derruba o gateway;
+- tools invalidas nao chegam ao pedido de confirmacao;
+- eventos de falha incluem tipo seguro da excecao e preservam o `run_id`;
+- `argos logs` nao quebra por encoding do terminal.
+
+**Status:** Concluida na entrega de contexto confiavel e recuperacao de erro.
+
+---
+
 ### Fase 2: fila persistente, scheduler e retomada
 
 **Objetivo:** permitir tarefas assincronas, agendadas e recuperaveis.
+
+**Status:** Iniciada com o plano base
+`docs/superpowers/plans/2026-06-07-argos-jobs-phase-2-start.md`.
 
 **Entregas:**
 

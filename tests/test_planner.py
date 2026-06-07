@@ -146,6 +146,50 @@ def test_planner_keeps_required_clarification_for_executable_request():
     assert client.calls == 1
 
 
+def test_planner_accepts_free_text_clarification_without_options():
+    class FreeTextClarificationClient:
+        def chat(self, messages):
+            return {
+                "response": (
+                    '{"mode":"clarification",'
+                    '"question":"Voce esta se referindo a web, mobile ou outro tipo?",'
+                    '"pending":{"field":"project_type",'
+                    '"action":{"capability":"answer","arguments":{}},'
+                    '"accept_free_text":true}}'
+                )
+            }
+
+    planner = Planner(llm_client=FreeTextClarificationClient())
+
+    plan = planner.create_plan("quais linguagens podemos usar para um site de vendas?")
+
+    assert plan["mode"] == "clarification"
+    assert plan["pending"]["field"] == "project_type"
+    assert plan["pending"]["options"] == []
+    assert plan["pending"]["accept_free_text"] is True
+
+
+def test_planner_defaults_model_clarification_without_options_to_free_text():
+    class MissingOptionsClarificationClient:
+        def chat(self, messages):
+            return {
+                "response": (
+                    '{"mode":"clarification",'
+                    '"question":"Voce quer web, mobile ou outro tipo?",'
+                    '"pending":{"field":"project_type",'
+                    '"action":{"capability":"answer","arguments":{}}}}'
+                )
+            }
+
+    planner = Planner(llm_client=MissingOptionsClarificationClient())
+
+    plan = planner.create_plan("quais linguagens podemos usar para um site de vendas?")
+
+    assert plan["mode"] == "clarification"
+    assert plan["pending"]["options"] == []
+    assert plan["pending"]["accept_free_text"] is True
+
+
 def test_planner_preserves_explicit_windows_path_for_file_write():
     class MalformedPathClient:
         def chat(self, messages):

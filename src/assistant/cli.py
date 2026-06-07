@@ -31,6 +31,11 @@ app.add_typer(tools_app, name="tools")
 console = Console()
 
 
+def _safe_console_text(value: str) -> str:
+    encoding = getattr(console.file, "encoding", None) or sys.stdout.encoding or "utf-8"
+    return value.encode(encoding, errors="replace").decode(encoding, errors="replace")
+
+
 class GatewayMemoryProxy:
     def __init__(
         self,
@@ -536,4 +541,4 @@ def logs() -> None:
     if not path.exists():
         console.print("Nenhum log do gateway encontrado.")
         return
-    console.print(path.read_text(encoding="utf-8", errors="replace"))
+    console.print(_safe_console_text(path.read_text(encoding="utf-8", errors="replace")))

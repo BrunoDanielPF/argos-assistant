@@ -55,9 +55,18 @@ class SessionMemory:
 
     def set_pending_clarification(self, pending: dict) -> None:
         self._context.pending_clarification = dict(pending)
+        action = pending.get("action")
+        capability = action.get("capability") if isinstance(action, dict) else None
+        field = pending.get("field")
+        if isinstance(capability, str) and isinstance(field, str):
+            self._context.active_task = {
+                "capability": capability,
+                "pending_field": field,
+            }
 
     def clear_pending_clarification(self) -> None:
         self._context.pending_clarification = None
+        self._context.active_task = None
 
     def snapshot(self) -> dict:
         return SessionSnapshot(

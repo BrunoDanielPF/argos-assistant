@@ -518,3 +518,14 @@ def test_cli_tools_help_lists_lifecycle_commands():
     assert result.exit_code == 0
     for command in ("register", "approve", "install", "enable", "disable", "generate"):
         assert command in result.stdout
+
+
+def test_cli_logs_handles_invalid_terminal_characters(monkeypatch, tmp_path):
+    log_file = tmp_path / "gateway.log"
+    log_file.write_bytes(b"erro: \xff\n")
+    monkeypatch.setenv("ARGOS_GATEWAY_LOG_FILE", str(log_file))
+
+    result = CliRunner().invoke(app, ["logs"])
+
+    assert result.exit_code == 0
+    assert "erro:" in result.stdout

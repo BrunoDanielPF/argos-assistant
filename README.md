@@ -437,6 +437,11 @@ confirmacao pendente fica persistida no banco local, pode ser retomada apos
 reiniciar o cliente ou o gateway e aceita apenas uma decisao. Interromper o
 terminal nao registra a acao como recusada nem executa a operacao.
 
+O contexto da sessao tambem guarda a tarefa ativa. Quando o usuario troca de
+assunto com expressoes como `esquece`, `muda de assunto` ou `agora quero`, a
+pendencia anterior e descartada antes do planejamento. Tools com argumentos
+incompletos sao bloqueadas antes da confirmacao e viram pedido de detalhes.
+
 No modo interativo, as 10 mensagens anteriores da sessao sao enviadas ao modelo. Isso permite continuar perguntas e instrucoes dependentes de contexto, por exemplo:
 
 ```text

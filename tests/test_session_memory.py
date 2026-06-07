@@ -51,6 +51,7 @@ def test_session_memory_updates_context_fields():
         "user_home": None,
         "last_search_results": [],
         "pending_clarification": None,
+        "active_task": None,
     }
 
 

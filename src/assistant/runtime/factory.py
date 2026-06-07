@@ -3,6 +3,8 @@ from contextlib import nullcontext
 import os
 from pathlib import Path
 
+from jsonschema import Draft202012Validator
+
 from assistant.agent import AssistantAgent
 from assistant.capabilities.registry import build_default_registry
 from assistant.config import AppConfig
@@ -94,6 +96,39 @@ class RuntimeFactory:
                 if tool_catalog.get_enabled(capability) is not None
                 else decide_policy(capability)
             ),
+            action_validator=lambda capability, arguments: self._validate_tool_action(
+                tool_catalog,
+                capability,
+                arguments,
+            ),
             confirmer=confirmer,
             file_resolver=FileResolver(),
         )
+
+    @staticmethod
+    def _validate_tool_action(
+        tool_catalog: ToolCatalog,
+        capability: str,
+        arguments: dict,
+    ) -> str | None:
+        tool = tool_catalog.get_enabled(capability)
+        if tool is None:
+            return None
+        errors = sorted(
+            Draft202012Validator(tool.manifest.input_schema).iter_errors(arguments),
+            key=lambda error: list(error.path),
+        )
+        if not errors:
+            return None
+        required = tool.manifest.input_schema.get("required", [])
+        missing = [
+            field
+            for field in required
+            if isinstance(field, str) and field not in arguments
+        ]
+        if missing:
+            return (
+                f"Faltam dados para executar {capability}: "
+                f"{', '.join(missing)}."
+            )
+        return f"Dados invalidos para executar {capability}: {errors[0].message}."

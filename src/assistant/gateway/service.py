@@ -38,11 +38,15 @@ class GatewayService:
             timer = Timer.start()
             try:
                 result = agent.handle(request.content)
-            except Exception:
+            except Exception as exc:
                 self._write_event(
                     "request_failed",
                     request,
-                    {"duration_ms": timer.elapsed_ms(), "error_type": "internal"},
+                    {
+                        "duration_ms": timer.elapsed_ms(),
+                        "error_type": "internal",
+                        "exception_type": type(exc).__name__,
+                    },
                 )
                 raise
 
