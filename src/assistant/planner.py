@@ -60,6 +60,13 @@ class Planner:
             " Prefer the most specific supported capability. "
             "Do not use run_shell_command for file search when search_files fits. "
             "Never claim that an action was completed in answer mode. "
+            "Answer ordinary informational questions directly when they are "
+            "well formed, including recipes, explanations, calculations, and "
+            "general knowledge. "
+            "Only ask for clarification when missing information prevents a "
+            "supported action or makes the requested result materially ambiguous. "
+            "Never invent a capability named clarification; clarification is a "
+            "response mode, not an executable capability. "
             "Ask for clarification instead of guessing paths, files, destructive choices, or missing arguments. "
             'When responding in answer mode, identify yourself as Argos if the user asks your name or who you are.'
         )
@@ -102,7 +109,149 @@ class Planner:
             response = self._llm_client.chat(messages)
         response_text = self._extract_response_text(response)
         parsed = self._parse_response_text(response_text)
+        if (
+            parsed.get("mode") == "clarification"
+            and self._should_review_clarification(user_input, parsed)
+        ):
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "Review the previous clarification critically. Keep "
+                        "mode=clarification only when missing information blocks "
+                        "a supported executable action explicitly requested by "
+                        "the user. If the user asked an informational question, "
+                        "answer it directly with mode=answer. Do not redirect the "
+                        "question to an unrelated tool or project workflow."
+                    ),
+                }
+            )
+            with self._loading_context():
+                response = self._llm_client.chat(messages)
+            response_text = self._extract_response_text(response)
+            parsed = self._parse_response_text(response_text)
+            if parsed.get("mode") == "clarification":
+                fallback_messages = [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are Argos answering a general informational "
+                            "question. Do not use tools and do not ask a "
+                            "clarifying question. Return only JSON using "
+                            '{"mode":"answer","content":"<direct useful answer>"}.'
+                        ),
+                    },
+                    {"role": "user", "content": user_input},
+                ]
+                with self._loading_context():
+                    response = self._llm_client.chat(fallback_messages)
+                response_text = self._extract_response_text(response)
+                parsed = self._parse_response_text(response_text)
+        parsed = self._apply_explicit_file_path(user_input, parsed)
         return self._validate_plan_shape(parsed)
+
+    @staticmethod
+    def _should_review_clarification(user_input: str, plan: dict) -> bool:
+        pending = plan.get("pending")
+        action = pending.get("action") if isinstance(pending, dict) else None
+        capability = action.get("capability") if isinstance(action, dict) else None
+        if capability == "clarification":
+            return True
+
+        normalized = "".join(
+            character
+            for character in unicodedata.normalize("NFKD", user_input.lower())
+            if not unicodedata.combining(character)
+        )
+        informational_markers = (
+            "como ",
+            "como?",
+            "quanto ",
+            "o que ",
+            "oque ",
+            "por que ",
+            "porque ",
+            "explique ",
+            "me explique ",
+            "pode me dizer ",
+        )
+        executable_markers = (
+            "abra ",
+            "abrir ",
+            "crie ",
+            "criar ",
+            "edite ",
+            "editar ",
+            "salve ",
+            "salvar ",
+            "execute ",
+            "executar ",
+            "procure ",
+            "buscar ",
+        )
+        return (
+            any(marker in normalized for marker in informational_markers)
+            and not any(marker in normalized for marker in executable_markers)
+        )
+
+    def _apply_explicit_file_path(self, user_input: str, plan: dict) -> dict:
+        explicit_path = self._extract_explicit_file_path(user_input)
+        if explicit_path is None:
+            return plan
+
+        normalized = dict(plan)
+        if normalized.get("mode") == "action":
+            normalized["arguments"] = self._replace_file_path(
+                normalized.get("capability"),
+                normalized.get("arguments"),
+                explicit_path,
+            )
+        elif normalized.get("mode") == "plan":
+            normalized["steps"] = [
+                {
+                    **step,
+                    "arguments": self._replace_file_path(
+                        step.get("capability"),
+                        step.get("arguments"),
+                        explicit_path,
+                    ),
+                }
+                for step in normalized.get("steps", [])
+                if isinstance(step, dict)
+            ]
+        return normalized
+
+    @staticmethod
+    def _replace_file_path(
+        capability: object,
+        arguments: object,
+        explicit_path: str,
+    ) -> object:
+        if capability not in {"create_file", "write_file", "open_file"}:
+            return arguments
+        if not isinstance(arguments, dict):
+            return arguments
+        normalized = dict(arguments)
+        normalized["path"] = explicit_path
+        return normalized
+
+    @staticmethod
+    def _extract_explicit_file_path(user_input: str) -> str | None:
+        quoted = re.search(
+            r"""["']((?:[A-Za-z]:\\|/)[^"']+)["']""",
+            user_input,
+        )
+        if quoted:
+            return quoted.group(1).strip()
+
+        after_file_marker = re.search(
+            r"\barquivo\s+((?:[A-Za-z]:\\|/).+?)\s*$",
+            user_input,
+            flags=re.IGNORECASE,
+        )
+        if after_file_marker:
+            return after_file_marker.group(1).strip().rstrip(",;!?")
+        return None
 
     def _heuristic_plan(self, user_input: str, context: dict | None = None) -> dict | None:
         normalized_input = user_input.strip()

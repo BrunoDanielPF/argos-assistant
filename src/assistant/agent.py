@@ -1,5 +1,6 @@
 from collections.abc import Callable
 import inspect
+from pathlib import Path
 
 from assistant.execution.policy import decide_policy
 from assistant.files.resolver import FileResolver
@@ -31,15 +32,66 @@ class AssistantAgent:
     def memory(self) -> SessionMemory:
         return self._memory
 
-    def _build_response(self, ok: bool, message: str, capability_name: str) -> dict:
+    def _build_response(
+        self,
+        ok: bool,
+        message: str,
+        capability_name: str,
+        policy: str | None = None,
+        decision: str | None = None,
+        reason: str | None = None,
+    ) -> dict:
         self._memory.add_assistant_message(message)
-        self._memory.add_audit_event(AuditEvent(kind="action", message=message))
+        self._memory.add_audit_event(
+            AuditEvent(
+                kind="action",
+                message=message,
+                capability=capability_name,
+                policy=policy,
+                decision=decision,
+                reason=reason,
+            )
+        )
         suggestions = build_suggestions(capability_name, message)
         self._memory.set_suggestions(suggestions)
         return {
             "ok": ok,
+            "status": "completed",
             "message": message,
             "suggestions": [item.model_dump() for item in suggestions],
+        }
+
+    def _build_confirmation_response(
+        self,
+        capability_name: str,
+        arguments: dict,
+    ) -> dict:
+        message = (
+            f"Preciso da sua confirmacao antes de executar "
+            f"{capability_name}."
+        )
+        self._memory.add_assistant_message(message)
+        self._memory.add_audit_event(
+            AuditEvent(
+                kind="confirmation",
+                message=message,
+                capability=capability_name,
+                policy="confirm",
+                decision="pending",
+                reason="confirmation_required",
+            )
+        )
+        suggestions = build_suggestions("answer", message)
+        self._memory.set_suggestions(suggestions)
+        return {
+            "ok": False,
+            "status": "waiting_confirmation",
+            "message": message,
+            "suggestions": [item.model_dump() for item in suggestions],
+            "confirmation": {
+                "capability": capability_name,
+                "arguments": dict(arguments),
+            },
         }
 
     def _execute_action(self, capability_name: str, arguments: dict):
@@ -57,7 +109,18 @@ class AssistantAgent:
             )()
 
         if policy == "confirm":
-            confirmed = self._confirmer(capability_name, arguments) if self._confirmer else False
+            if self._confirmer is None:
+                return type(
+                    "Result",
+                    (),
+                    {
+                        "ok": False,
+                        "message": "Confirmation required",
+                        "data": None,
+                        "confirmation_required": True,
+                    },
+                )()
+            confirmed = self._confirmer(capability_name, arguments)
             if not confirmed:
                 return type(
                     "Result",
@@ -66,6 +129,35 @@ class AssistantAgent:
                 )()
 
         return self._executor.execute(capability_name, arguments)
+
+    def execute_confirmed_action(
+        self,
+        capability_name: str,
+        arguments: dict,
+        approved: bool,
+    ) -> dict:
+        if not approved:
+            return self._build_response(
+                ok=False,
+                message="Acao rejeitada pelo usuario.",
+                capability_name=capability_name,
+                policy="confirm",
+                decision="rejected",
+                reason="user_rejected",
+            )
+        result = self._executor.execute(capability_name, arguments)
+        return self._build_response(
+            ok=result.ok,
+            message=self._recover_failure_message(
+                capability_name,
+                arguments,
+                result.message,
+            ),
+            capability_name=capability_name,
+            policy="confirm",
+            decision="approved",
+            reason="user_approved",
+        )
 
     def _recover_failure_message(self, capability_name: str, arguments: dict, message: str) -> str:
         if capability_name == "open_file" and message.startswith("File not found:"):
@@ -145,6 +237,28 @@ class AssistantAgent:
         response = self._build_clarification_response("\n".join(question_lines), pending)
         return None, response
 
+    @staticmethod
+    def _normalize_file_creation(
+        capability_name: str,
+        arguments: dict,
+    ) -> tuple[str, dict]:
+        if capability_name != "write_file":
+            return capability_name, arguments
+        path = arguments.get("path")
+        if not isinstance(path, str):
+            return capability_name, arguments
+        target = Path(path)
+        if (
+            target.is_absolute()
+            and target.suffix
+            and not target.exists()
+            and arguments.get("write_mode") in {None, "replace"}
+        ):
+            normalized = dict(arguments)
+            normalized.pop("write_mode", None)
+            return "create_file", normalized
+        return capability_name, arguments
+
     def handle(self, user_input: str) -> dict:
         snapshot = self._memory.snapshot()
         previous_history = snapshot.get("history", [])
@@ -176,15 +290,24 @@ class AssistantAgent:
 
         if plan["mode"] == "action":
             capability_name = plan["capability"]
-            arguments, clarification_response = self._prepare_action(
+            capability_name, planned_arguments = self._normalize_file_creation(
                 capability_name,
                 plan["arguments"],
+            )
+            arguments, clarification_response = self._prepare_action(
+                capability_name,
+                planned_arguments,
                 snapshot_context,
             )
             if clarification_response is not None:
                 return clarification_response
             assert arguments is not None
             result = self._execute_action(capability_name, arguments)
+            if getattr(result, "confirmation_required", False):
+                return self._build_confirmation_response(
+                    capability_name,
+                    arguments,
+                )
             if capability_name == "search_files" and result.ok and result.data:
                 matches = result.data.get("matches")
                 if isinstance(matches, list):
@@ -200,9 +323,13 @@ class AssistantAgent:
             last_capability = "plan"
             for step in plan["steps"]:
                 capability_name = step["capability"]
-                arguments, clarification_response = self._prepare_action(
+                capability_name, planned_arguments = self._normalize_file_creation(
                     capability_name,
                     step["arguments"],
+                )
+                arguments, clarification_response = self._prepare_action(
+                    capability_name,
+                    planned_arguments,
                     snapshot_context,
                 )
                 if clarification_response is not None:
@@ -210,6 +337,11 @@ class AssistantAgent:
                 assert arguments is not None
                 last_capability = capability_name
                 result = self._execute_action(capability_name, arguments)
+                if getattr(result, "confirmation_required", False):
+                    return self._build_confirmation_response(
+                        capability_name,
+                        arguments,
+                    )
                 messages.append(result.message)
                 if not result.ok:
                     return self._build_response(
@@ -233,6 +365,7 @@ class AssistantAgent:
         self._memory.set_suggestions(suggestions)
         return {
             "ok": True,
+            "status": "completed",
             "message": answer,
             "suggestions": [item.model_dump() for item in suggestions],
         }

@@ -3,7 +3,10 @@ from fastapi.testclient import TestClient
 from assistant.gateway.app import create_gateway_app
 from assistant.gateway.auth import LocalTokenStore
 from assistant.gateway.service import GatewayService
+from assistant.agent import AssistantAgent
+from assistant.execution.executor import ActionExecutor
 from assistant.memory.session import SessionMemory
+from assistant.runtime.contracts import AgentRequest
 from assistant.sessions.repository import SessionRepository
 
 
@@ -75,3 +78,47 @@ def test_gateway_restores_conversation_after_service_restart(tmp_path):
         "turn 3: segundo",
     ]
     second_repository.close()
+
+
+def test_gateway_creates_file_only_after_confirmation(tmp_path):
+    target = tmp_path / "receita.md"
+
+    class CreateFilePlanner:
+        def create_plan(self, user_input):
+            return {
+                "mode": "action",
+                "capability": "create_file",
+                "arguments": {
+                    "path": str(target),
+                    "content": "# Receita\n\nPao de forma",
+                },
+            }
+
+    class AgentFactory:
+        def build_agent(self, memory=None, confirmer=None):
+            return AssistantAgent(
+                planner=CreateFilePlanner(),
+                executor=ActionExecutor(),
+                memory=memory,
+            )
+
+    repository = SessionRepository(tmp_path / "argos.db")
+    service = GatewayService(AgentFactory(), repository)
+    request = service.handle(
+        AgentRequest(
+            session_id="default",
+            content="salve a receita",
+        )
+    )
+
+    assert request.status == "waiting_confirmation"
+    assert not target.exists()
+
+    result = service.resolve_confirmation(
+        request.confirmation.confirmation_id,
+        approved=True,
+    )
+
+    assert result.ok is True
+    assert target.read_text(encoding="utf-8") == "# Receita\n\nPao de forma"
+    repository.close()

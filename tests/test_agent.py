@@ -85,6 +85,64 @@ def test_agent_requires_confirmation_before_sensitive_action():
     assert confirmations == [("search_files", {"root": "C:\\temp", "pattern": "notes.txt"})]
 
 
+def test_agent_without_confirmer_requests_confirmation_instead_of_cancelling():
+    class ConfirmPlanner:
+        def create_plan(self, user_input: str) -> dict:
+            return {
+                "mode": "action",
+                "capability": "create_file",
+                "arguments": {
+                    "path": "C:\\Users\\frand\\receita.md",
+                    "content": "receita",
+                },
+            }
+
+    class FailIfCalledExecutor:
+        def execute(self, capability_name: str, args: dict):
+            raise AssertionError("executor should wait for confirmation")
+
+    agent = AssistantAgent(
+        planner=ConfirmPlanner(),
+        executor=FailIfCalledExecutor(),
+    )
+
+    response = agent.handle("crie o arquivo")
+
+    assert response["status"] == "waiting_confirmation"
+    assert response["confirmation"]["capability"] == "create_file"
+    assert response["confirmation"]["arguments"]["path"].endswith("receita.md")
+    assert "cancel" not in response["message"].lower()
+    audit = agent.memory.snapshot()["audit"][-1]
+    assert audit["capability"] == "create_file"
+    assert audit["policy"] == "confirm"
+    assert audit["decision"] == "pending"
+
+
+def test_agent_executes_action_after_remote_confirmation():
+    executed = []
+
+    class RecordingExecutor:
+        def execute(self, capability_name: str, args: dict):
+            executed.append((capability_name, args))
+            return type(
+                "Result",
+                (),
+                {"ok": True, "message": "Arquivo criado", "data": None},
+            )()
+
+    agent = AssistantAgent(planner=FakePlanner(), executor=RecordingExecutor())
+
+    response = agent.execute_confirmed_action(
+        "create_file",
+        {"path": "C:\\Users\\frand\\receita.md", "content": "receita"},
+        approved=True,
+    )
+
+    assert response["ok"] is True
+    assert response["status"] == "completed"
+    assert executed[0][0] == "create_file"
+
+
 class FakeFailedExecutor:
     def execute(self, capability_name: str, args: dict):
         return type("Result", (), {"ok": False, "message": "Failed to open https://ollama.com"})()
@@ -396,6 +454,69 @@ def test_agent_asks_user_to_choose_when_file_resolution_is_ambiguous(tmp_path):
     pending = agent.memory.snapshot()["context"]["pending_clarification"]
     assert pending["field"] == "path"
     assert len(pending["options"]) == 3
+
+
+def test_agent_converts_write_to_create_for_explicit_new_file(tmp_path):
+    target = tmp_path / "receita.md"
+    confirmations = []
+
+    class WritePlanner:
+        def create_plan(self, user_input, context=None):
+            return {
+                "mode": "action",
+                "capability": "write_file",
+                "arguments": {
+                    "path": str(target),
+                    "content": "# Receita",
+                    "write_mode": "replace",
+                },
+            }
+
+    agent = AssistantAgent(
+        planner=WritePlanner(),
+        executor=ActionExecutor(),
+        confirmer=lambda capability, arguments: confirmations.append(
+            (capability, arguments)
+        )
+        or True,
+    )
+
+    response = agent.handle("salve a receita neste arquivo")
+
+    assert response["ok"] is True
+    assert target.read_text(encoding="utf-8") == "# Receita"
+    assert confirmations[0][0] == "create_file"
+
+
+def test_agent_converts_write_without_mode_to_create_for_explicit_new_file(tmp_path):
+    target = tmp_path / "receita.md"
+    confirmations = []
+
+    class WritePlanner:
+        def create_plan(self, user_input, context=None):
+            return {
+                "mode": "action",
+                "capability": "write_file",
+                "arguments": {
+                    "path": str(target),
+                    "content": "# Receita",
+                },
+            }
+
+    agent = AssistantAgent(
+        planner=WritePlanner(),
+        executor=ActionExecutor(),
+        confirmer=lambda capability, arguments: confirmations.append(
+            (capability, arguments)
+        )
+        or True,
+    )
+
+    response = agent.handle("salve a receita neste arquivo")
+
+    assert response["ok"] is True
+    assert target.read_text(encoding="utf-8") == "# Receita"
+    assert confirmations[0][0] == "create_file"
 
 
 class FailIfCalledClientForAgent:

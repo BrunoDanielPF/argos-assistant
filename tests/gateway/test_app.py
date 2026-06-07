@@ -16,6 +16,15 @@ class FakeGatewayService:
             suggestions=[],
         )
 
+    def resolve_confirmation(self, confirmation_id, approved):
+        return AgentResponse(
+            session_id="default",
+            run_id="run-1",
+            ok=approved,
+            message="Arquivo criado" if approved else "Acao rejeitada",
+            suggestions=[],
+        )
+
 
 def build_client(tmp_path):
     token_store = LocalTokenStore(
@@ -126,4 +135,48 @@ def test_internal_error_returns_safe_message_and_run_id(tmp_path):
     assert response.json()["message"] == "Internal gateway error"
     assert response.json()["run_id"]
     assert "private stack detail" not in response.text
+    repository.close()
+
+
+def test_confirmation_endpoint_resumes_action(tmp_path):
+    client, token, repository = build_client(tmp_path)
+
+    response = client.post(
+        "/v1/confirmations/confirm-1",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"approved": True},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "Arquivo criado"
+    repository.close()
+
+
+def test_confirmation_endpoint_rejects_duplicate_decision(tmp_path):
+    class ConflictService(FakeGatewayService):
+        def resolve_confirmation(self, confirmation_id, approved):
+            raise ValueError("already resolved")
+
+    token_store = LocalTokenStore(
+        tmp_path / "gateway.token",
+        permission_hardener=lambda path: None,
+    )
+    token = token_store.get_or_create()
+    repository = SessionRepository(tmp_path / "argos.db")
+    client = TestClient(
+        create_gateway_app(
+            service=ConflictService(),
+            token_store=token_store,
+            repository=repository,
+            model_name="test-model",
+        )
+    )
+
+    response = client.post(
+        "/v1/confirmations/confirm-1",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"approved": True},
+    )
+
+    assert response.status_code == 409
     repository.close()

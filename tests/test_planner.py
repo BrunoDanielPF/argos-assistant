@@ -38,6 +38,139 @@ def test_planner_parses_structured_action_response():
     assert plan["arguments"]["url"] == "https://ollama.com"
     assert "Supported capabilities: open_application, open_url." in llm_client.messages[0]["content"]
     assert "You are Argos." in llm_client.messages[0]["content"]
+    assert "ordinary informational questions directly" in llm_client.messages[0]["content"]
+    assert "Never invent a capability named clarification" in llm_client.messages[0]["content"]
+
+
+def test_planner_retries_spurious_clarification_for_common_question():
+    class SpuriousClarificationClient:
+        def __init__(self):
+            self.calls = 0
+
+        def chat(self, messages):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "response": (
+                        '{"mode":"clarification","question":"Voce quis dizer pao?",'
+                        '"pending":{"field":"intention","action":'
+                        '{"capability":"clarification","arguments":{}},'
+                        '"options":[{"id":"sim","label":"sim"}]}}'
+                    )
+                }
+            return {
+                "response": (
+                    '{"mode":"answer","content":"Claro. Aqui esta a receita."}'
+                )
+            }
+
+    client = SpuriousClarificationClient()
+    planner = Planner(llm_client=client)
+
+    plan = planner.create_plan("como fazer um pao de forma?")
+
+    assert plan == {
+        "mode": "answer",
+        "content": "Claro. Aqui esta a receita.",
+    }
+    assert client.calls == 2
+
+
+def test_planner_uses_tool_free_fallback_when_clarification_persists():
+    class PersistentClarificationClient:
+        def __init__(self):
+            self.calls = 0
+
+        def chat(self, messages):
+            self.calls += 1
+            if self.calls < 3:
+                return {
+                    "response": (
+                        '{"mode":"clarification","question":"Qual contexto?",'
+                        '"pending":{"field":"context","action":'
+                        '{"capability":"local.spring.create_project","arguments":{}},'
+                        '"options":[{"id":"food","label":"comida"}]}}'
+                    )
+                }
+            assert "Do not use tools" in messages[0]["content"]
+            return {
+                "response": (
+                    '{"mode":"answer","content":"Misture os ingredientes e asse."}'
+                )
+            }
+
+    client = PersistentClarificationClient()
+    planner = Planner(
+        llm_client=client,
+        tool_definitions=[
+            {
+                "name": "local.spring.create_project",
+                "description": "Cria projeto Spring.",
+                "input_schema": {"type": "object"},
+            }
+        ],
+    )
+
+    plan = planner.create_plan("como fazer um pao de forma?")
+
+    assert plan["mode"] == "answer"
+    assert client.calls == 3
+
+
+def test_planner_keeps_required_clarification_for_executable_request():
+    class RequiredClarificationClient:
+        def __init__(self):
+            self.calls = 0
+
+        def chat(self, messages):
+            self.calls += 1
+            return {
+                "response": (
+                    '{"mode":"clarification","question":"Qual arquivo devo editar?",'
+                    '"pending":{"field":"path","action":'
+                    '{"capability":"write_file","arguments":{"content":"ola"}},'
+                    '"options":[{"id":"informar","label":"informar caminho"}]}}'
+                )
+            }
+
+    client = RequiredClarificationClient()
+    planner = Planner(
+        llm_client=client,
+        capabilities=["write_file"],
+    )
+
+    plan = planner.create_plan("edite um arquivo e escreva ola")
+
+    assert plan["mode"] == "clarification"
+    assert plan["pending"]["field"] == "path"
+    assert client.calls == 1
+
+
+def test_planner_preserves_explicit_windows_path_for_file_write():
+    class MalformedPathClient:
+        def chat(self, messages):
+            return {
+                "response": (
+                    '{"mode":"action","capability":"write_file","arguments":{'
+                    '"path":"salve essa receita no arquivo '
+                    'C:\\\\Users\\\\frand\\\\AppData\\\\Local\\\\Temp\\\\argos-confirmation-test.md",'
+                    '"content":"# Receita\\n\\nMisture os ingredientes.",'
+                    '"write_mode":"replace"}}'
+                )
+            }
+
+    planner = Planner(llm_client=MalformedPathClient())
+
+    plan = planner.create_plan(
+        "salve essa receita no arquivo "
+        "C:\\Users\\frand\\AppData\\Local\\Temp\\argos-confirmation-test.md"
+    )
+
+    assert plan["mode"] == "action"
+    assert plan["arguments"]["path"] == (
+        "C:\\Users\\frand\\AppData\\Local\\Temp\\argos-confirmation-test.md"
+    )
+    assert plan["arguments"]["content"].startswith("# Receita")
 
 
 def test_planner_uses_heuristic_for_open_application():

@@ -13,6 +13,10 @@ class Suggestion(BaseModel):
 class AuditEvent(BaseModel):
     kind: str
     message: str
+    capability: str | None = None
+    policy: str | None = None
+    decision: str | None = None
+    reason: str | None = None
 
 
 class SessionContext(BaseModel):

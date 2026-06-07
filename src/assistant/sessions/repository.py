@@ -27,6 +27,20 @@ class SessionRepository:
                 )
                 """
             )
+            self._connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS confirmations (
+                    confirmation_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    capability TEXT NOT NULL,
+                    arguments_json TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    resolved_at TEXT
+                )
+                """
+            )
 
     def save(self, session_id: str, snapshot: dict) -> None:
         validated = SessionSnapshot.model_validate(snapshot)
@@ -76,6 +90,83 @@ class SessionRepository:
             }
             for row in rows
         ]
+
+    def save_confirmation(
+        self,
+        confirmation_id: str,
+        session_id: str,
+        run_id: str,
+        capability: str,
+        arguments: dict,
+    ) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO confirmations (
+                    confirmation_id,
+                    session_id,
+                    run_id,
+                    capability,
+                    arguments_json,
+                    status,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, 'pending', ?)
+                """,
+                (
+                    confirmation_id,
+                    session_id,
+                    run_id,
+                    capability,
+                    json.dumps(arguments, ensure_ascii=True),
+                    now,
+                ),
+            )
+
+    def load_confirmation(self, confirmation_id: str) -> dict | None:
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT confirmation_id, session_id, run_id, capability,
+                       arguments_json, status, created_at, resolved_at
+                FROM confirmations
+                WHERE confirmation_id = ?
+                """,
+                (confirmation_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "confirmation_id": row[0],
+            "session_id": row[1],
+            "run_id": row[2],
+            "capability": row[3],
+            "arguments": json.loads(row[4]),
+            "status": row[5],
+            "created_at": row[6],
+            "resolved_at": row[7],
+        }
+
+    def resolve_confirmation(
+        self,
+        confirmation_id: str,
+        approved: bool,
+    ) -> dict | None:
+        status = "approved" if approved else "rejected"
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock, self._connection:
+            cursor = self._connection.execute(
+                """
+                UPDATE confirmations
+                SET status = ?, resolved_at = ?
+                WHERE confirmation_id = ? AND status = 'pending'
+                """,
+                (status, now, confirmation_id),
+            )
+        if cursor.rowcount != 1:
+            return None
+        return self.load_confirmation(confirmation_id)
 
     def close(self) -> None:
         with self._lock:

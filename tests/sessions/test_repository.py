@@ -46,3 +46,24 @@ def test_repository_returns_none_for_unknown_session(tmp_path):
 
     assert repository.load("missing") is None
     repository.close()
+
+
+def test_repository_persists_and_resolves_confirmation_once(tmp_path):
+    repository = SessionRepository(tmp_path / "argos.db")
+    repository.save_confirmation(
+        confirmation_id="confirm-1",
+        session_id="default",
+        run_id="run-1",
+        capability="write_file",
+        arguments={"path": "C:\\Users\\user\\receita.md", "content": "receita"},
+    )
+
+    pending = repository.load_confirmation("confirm-1")
+    resolved = repository.resolve_confirmation("confirm-1", approved=True)
+    duplicate = repository.resolve_confirmation("confirm-1", approved=False)
+
+    assert pending["status"] == "pending"
+    assert pending["arguments"]["content"] == "receita"
+    assert resolved["status"] == "approved"
+    assert duplicate is None
+    repository.close()

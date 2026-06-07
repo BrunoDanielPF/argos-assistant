@@ -431,6 +431,12 @@ O comando `assistant` ainda existe como alias de compatibilidade, mas o nome ofi
 
 Durante chamadas ao modelo, a CLI mostra `Argos esta pensando...` enquanto aguarda a resposta. O indicador e encerrado antes de qualquer pedido de confirmacao, permitindo responder normalmente com `y`, `yes`, `s` ou `sim`.
 
+Quando uma acao sensivel e planejada pelo gateway, o Argos mostra a capacidade,
+os argumentos resumidos e as permissoes efetivas antes de executar. A
+confirmacao pendente fica persistida no banco local, pode ser retomada apos
+reiniciar o cliente ou o gateway e aceita apenas uma decisao. Interromper o
+terminal nao registra a acao como recusada nem executa a operacao.
+
 No modo interativo, as 10 mensagens anteriores da sessao sao enviadas ao modelo. Isso permite continuar perguntas e instrucoes dependentes de contexto, por exemplo:
 
 ```text

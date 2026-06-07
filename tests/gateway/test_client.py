@@ -93,3 +93,30 @@ def test_client_loads_persisted_session_snapshot(tmp_path):
     ).get_session("default")
 
     assert snapshot["history"][0]["content"] == "oi"
+
+
+def test_client_sends_confirmation_decision(tmp_path):
+    config = build_config(tmp_path)
+
+    def handler(request):
+        assert request.url.path == "/v1/confirmations/confirm-1"
+        assert request.read().decode() == '{"approved":true}'
+        return httpx.Response(
+            200,
+            json={
+                "session_id": "default",
+                "run_id": "run-1",
+                "ok": True,
+                "status": "completed",
+                "message": "Arquivo criado",
+                "suggestions": [],
+                "confirmation": None,
+            },
+        )
+
+    response = GatewayClient(
+        config,
+        transport=httpx.MockTransport(handler),
+    ).confirm("confirm-1", approved=True)
+
+    assert response.ok is True

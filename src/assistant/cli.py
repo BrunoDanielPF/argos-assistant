@@ -81,6 +81,7 @@ class GatewayAgentAdapter:
             user_input,
             cwd=cwd,
         )
+        response = resolve_gateway_confirmation(self._client, response)
         return {
             "ok": response.ok,
             "message": response.message,
@@ -222,6 +223,36 @@ def render_gateway_error(exc: GatewayError) -> None:
         console.print("Execute 'argos start' para iniciar o servico residente.")
 
 
+def resolve_gateway_confirmation(client: GatewayClient, response):
+    if (
+        getattr(response, "status", "completed") != "waiting_confirmation"
+        or getattr(response, "confirmation", None) is None
+    ):
+        return response
+
+    confirmation = response.confirmation
+    console.print("Confirmacao necessaria:")
+    console.print(f"Acao: {confirmation.capability}")
+    for key, value in confirmation.arguments_summary.items():
+        console.print(f"{key}: {value}")
+    if confirmation.permissions:
+        console.print("Permissoes:")
+        for permission in confirmation.permissions:
+            console.print(f"- {permission}")
+    console.print(confirmation.question)
+    try:
+        answer = builtins.input("Executar esta acao? [s/N]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        console.print(
+            "[PENDING] A confirmacao continua pendente no gateway."
+        )
+        return response
+    return client.confirm(
+        confirmation.confirmation_id,
+        approved=answer in {"y", "yes", "s", "sim"},
+    )
+
+
 def build_tool_catalog(config: AppConfig | None = None) -> ToolCatalog:
     config = config or AppConfig()
     bundled_root = Path(__file__).resolve().parents[2] / "tools"
@@ -346,7 +377,14 @@ def run_interactive_session(
     console.print("Interactive mode. Type 'exit' to quit.")
 
     while True:
-        prompt = typer.prompt(ASSISTANT_PROMPT)
+        try:
+            prompt = typer.prompt(ASSISTANT_PROMPT)
+        except (KeyboardInterrupt, EOFError, typer.Abort):
+            console.print(
+                "\nInteracao interrompida pelo terminal. "
+                "Nenhuma nova solicitacao foi enviada."
+            )
+            break
         if prompt.strip().lower() in {"exit", "quit"}:
             console.print("Bye.")
             break
@@ -430,7 +468,9 @@ def chat(
             agent = build_agent(confirmer=confirm_action)
             result = agent.handle(prompt)
         else:
-            response = build_gateway_client().chat(session, prompt)
+            client = build_gateway_client()
+            response = client.chat(session, prompt)
+            response = resolve_gateway_confirmation(client, response)
             result = {
                 "ok": response.ok,
                 "message": response.message,

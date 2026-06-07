@@ -77,6 +77,72 @@ def test_cli_gateway_unavailable_does_not_fallback_silently(monkeypatch):
     assert "argos start" in result.stdout
 
 
+def test_cli_prompts_and_resumes_gateway_confirmation(monkeypatch):
+    from assistant.runtime.contracts import (
+        AgentResponse,
+        ConfirmationRequest,
+    )
+
+    decisions = []
+
+    class FakeGatewayClient:
+        def chat(self, session_id, content, cwd=None):
+            return AgentResponse(
+                session_id=session_id,
+                run_id="run-1",
+                ok=False,
+                status="waiting_confirmation",
+                message="Preciso de confirmacao.",
+                confirmation=ConfirmationRequest(
+                    confirmation_id="confirm-1",
+                    capability="create_file",
+                    arguments_summary={
+                        "path": "C:\\Users\\frand\\receita.md",
+                        "content_length": 120,
+                    },
+                    permissions=[
+                        "write:C:\\Users\\frand\\receita.md"
+                    ],
+                    question="Autorizar a criacao do arquivo?",
+                ),
+            )
+
+        def confirm(self, confirmation_id, approved):
+            decisions.append((confirmation_id, approved))
+            return AgentResponse(
+                session_id="default",
+                run_id="run-1",
+                ok=True,
+                message="Arquivo criado",
+            )
+
+    monkeypatch.setattr(
+        "assistant.cli.build_gateway_client",
+        lambda: FakeGatewayClient(),
+    )
+    monkeypatch.setattr("builtins.input", lambda prompt: "sim")
+
+    result = CliRunner().invoke(app, ["chat", "crie a receita"])
+
+    assert result.exit_code == 0
+    assert "C:\\Users\\frand\\receita.md" in result.stdout
+    assert "write:C:\\Users\\frand\\receita.md" in result.stdout
+    assert "Arquivo criado" in result.stdout
+    assert decisions == [("confirm-1", True)]
+
+
+def test_interactive_explains_keyboard_interruption(monkeypatch):
+    monkeypatch.setattr(
+        "assistant.cli.typer.prompt",
+        lambda prompt: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+
+    result = CliRunner().invoke(app, ["interactive", "--direct"])
+
+    assert result.exit_code == 0
+    assert "Interacao interrompida" in result.stdout
+
+
 def test_cli_chat_command_does_not_wrap_entire_agent_call_in_status(monkeypatch):
     class FakeAgent:
         def handle(self, user_input: str) -> dict:

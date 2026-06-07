@@ -4,7 +4,11 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
 
 from assistant.gateway.auth import LocalTokenStore
-from assistant.runtime.contracts import AgentRequest, AgentResponse
+from assistant.runtime.contracts import (
+    AgentRequest,
+    AgentResponse,
+    ConfirmationDecision,
+)
 from assistant.sessions.repository import SessionRepository
 
 
@@ -54,6 +58,26 @@ def create_gateway_app(
                     "run_id": request.run_id,
                 },
             )
+
+    @app.post(
+        "/v1/confirmations/{confirmation_id}",
+        response_model=AgentResponse,
+        dependencies=[Depends(authenticate)],
+    )
+    def resolve_confirmation(
+        confirmation_id: str,
+        decision: ConfirmationDecision,
+    ):
+        try:
+            return service.resolve_confirmation(
+                confirmation_id,
+                approved=decision.approved,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="Confirmation not found or already resolved",
+            ) from exc
 
     @app.get("/v1/sessions", dependencies=[Depends(authenticate)])
     def sessions() -> dict:

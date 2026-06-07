@@ -76,6 +76,23 @@ class GatewayClient:
             raise GatewayProtocolError("Invalid session snapshot")
         return payload
 
+    def confirm(
+        self,
+        confirmation_id: str,
+        approved: bool,
+    ) -> AgentResponse:
+        payload = self._request(
+            "POST",
+            f"/v1/confirmations/{confirmation_id}",
+            json={"approved": approved},
+        )
+        try:
+            return AgentResponse.model_validate(payload)
+        except ValidationError as exc:
+            raise GatewayProtocolError(
+                "Invalid gateway confirmation response"
+            ) from exc
+
     def _request(
         self,
         method: str,
