@@ -62,8 +62,7 @@ stateDiagram-v2
 
 ## Entrega 2.3: worker simples
 
-**Status:** fundacao concluida. Integracao automatica com o gateway fica para a
-proxima entrega da Fase 2.
+**Status:** concluida.
 
 - Create: `src/assistant/jobs/worker.py`
 - Modify: `src/assistant/gateway/service.py`
@@ -78,8 +77,7 @@ proxima entrega da Fase 2.
 
 ## Entrega 2.4: lembretes persistentes
 
-**Status:** concluida para agendamento persistente. A notificacao automatica
-residente fica para a proxima entrega da Fase 2.
+**Status:** concluida.
 
 - Modify: `src/assistant/planner.py`
 - Modify: `src/assistant/execution/executor.py`
@@ -97,6 +95,28 @@ residente fica para a proxima entrega da Fase 2.
 - jobs podem ter `scheduled_for`;
 - `next_queued` ignora jobs agendados para o futuro;
 - `argos jobs list` e `argos jobs show` exibem o horario agendado.
+
+## Entrega 2.5: scheduler residente e notificacao local
+
+**Status:** concluida.
+
+- Create: `src/assistant/jobs/scheduler.py`
+- Create: `src/assistant/notifications/local.py`
+- Modify: `src/assistant/gateway/app.py`
+- Modify: `src/assistant/gateway/process.py`
+- Test: `tests/jobs/test_scheduler.py`
+- Test: `tests/notifications/test_local.py`
+- Test: `tests/gateway/test_app.py`
+
+**Criterios:**
+
+- gateway inicia e para o scheduler junto com a aplicacao;
+- scheduler executa jobs vencidos sem depender da CLI aberta;
+- lembrete vencido nao chama o modelo, gera notificacao local e fica
+  `succeeded`;
+- notificacoes sao registradas em `~/.argos/logs/notifications.log`;
+- intervalo pode ser ajustado por `job_scheduler_interval_seconds` ou
+  `ARGOS_JOB_SCHEDULER_INTERVAL_SECONDS`.
 
 ## Fora do escopo inicial
 

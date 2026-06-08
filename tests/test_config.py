@@ -19,16 +19,21 @@ def test_default_ollama_runtime_options_prioritize_responsiveness():
 def test_config_precedence_is_env_then_yaml_then_default(tmp_path, monkeypatch):
     config_file = tmp_path / "config.yaml"
     config_file.write_text(
-        "schema_version: '1.0'\nmodel: yaml-model\ngateway_port: 17831\n",
+        "schema_version: '1.0'\n"
+        "model: yaml-model\n"
+        "gateway_port: 17831\n"
+        "job_scheduler_interval_seconds: 30\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("ARGOS_MODEL", "env-model")
+    monkeypatch.setenv("ARGOS_JOB_SCHEDULER_INTERVAL_SECONDS", "2")
 
     config = AppConfig.load(config_file)
 
     assert config.model == "env-model"
     assert config.gateway_port == 17831
     assert config.gateway_host == "127.0.0.1"
+    assert config.job_scheduler_interval_seconds == 2
 
 
 def test_config_rejects_gateway_bind_outside_loopback(tmp_path):

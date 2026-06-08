@@ -14,6 +14,10 @@ from assistant.config import AppConfig
 from assistant.gateway.app import create_gateway_app
 from assistant.gateway.auth import LocalTokenStore
 from assistant.gateway.service import GatewayService
+from assistant.jobs.repository import JobRepository
+from assistant.jobs.scheduler import JobScheduler
+from assistant.jobs.worker import JobWorker
+from assistant.notifications.local import NotificationSink
 from assistant.observability.events import EventLog
 from assistant.runtime.factory import RuntimeFactory
 from assistant.sessions.repository import SessionRepository
@@ -154,11 +158,23 @@ def serve() -> None:
         repository,
         event_log=EventLog(config.event_log_file),
     )
+    job_repository = JobRepository(config.database_file)
+    scheduler = JobScheduler(
+        JobWorker(
+            job_repository,
+            service,
+            notifier=NotificationSink(
+                config.argos_home / "logs" / "notifications.log"
+            ),
+        ),
+        interval_seconds=config.job_scheduler_interval_seconds,
+    )
     app = create_gateway_app(
         service=service,
         token_store=token_store,
         repository=repository,
         model_name=config.model,
+        scheduler=scheduler,
     )
     uvicorn.run(
         app,

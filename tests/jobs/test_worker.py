@@ -18,6 +18,14 @@ class RecordingService:
         return self.response
 
 
+class RecordingNotifier:
+    def __init__(self):
+        self.notifications = []
+
+    def notify(self, notification):
+        self.notifications.append(notification)
+
+
 def test_worker_executes_next_queued_job_successfully(tmp_path):
     repository = JobRepository(tmp_path / "argos.db")
     job = repository.create(
@@ -112,4 +120,31 @@ def test_worker_does_not_execute_future_scheduled_job(tmp_path):
 
     assert processed is None
     assert service.requests == []
+    repository.close()
+
+
+def test_worker_notifies_due_reminder_without_calling_model(tmp_path):
+    repository = JobRepository(tmp_path / "argos.db")
+    job = repository.create(
+        session_id="default",
+        run_id="run-1",
+        payload={
+            "type": "reminder",
+            "content": "Lembrete: revisar requisitos",
+        },
+        scheduled_for=datetime.now(timezone.utc) - timedelta(seconds=1),
+    )
+    service = RecordingService(
+        AgentResponse(session_id="default", run_id="run-1", ok=True, message="ok")
+    )
+    notifier = RecordingNotifier()
+
+    processed = JobWorker(repository, service, notifier=notifier).run_once()
+
+    loaded = repository.load(job.job_id)
+    assert processed is not None
+    assert loaded.status == JobStatus.SUCCEEDED
+    assert service.requests == []
+    assert notifier.notifications[0].title == "Argos"
+    assert notifier.notifications[0].message == "Lembrete: revisar requisitos"
     repository.close()

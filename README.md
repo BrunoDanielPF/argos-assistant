@@ -392,10 +392,11 @@ indisponivel, pois isso criaria uma sessao diferente.
 ### Jobs locais
 
 A Fase 2 iniciou a fundacao de jobs persistentes em SQLite. Nesta etapa, o
-Argos ja consegue registrar, consultar, cancelar e reenfileirar jobs. Pedidos
-simples de lembrete, como "me lembre que daqui 10 minutos...", viram jobs
-agendados com `scheduled_for`; a notificacao automatica em background sera
-conectada nas proximas entregas.
+Argos ja consegue registrar, consultar, cancelar, reenfileirar e executar jobs
+vencidos pelo gateway residente. Pedidos simples de lembrete, como "me lembre
+que daqui 10 minutos...", viram jobs agendados com `scheduled_for`; quando o
+horario chega, o scheduler do gateway marca o job como concluido e registra uma
+notificacao local em `~/.argos/logs/notifications.log`.
 
 ```bash
 argos jobs list
@@ -435,6 +436,7 @@ schema_version: "1.0"
 model: argos-qwen3:4b
 gateway_host: 127.0.0.1
 gateway_port: 17831
+job_scheduler_interval_seconds: 5
 ```
 
 Se a porta estiver ocupada, altere `gateway_port` e reinicie o servico. Se o
@@ -683,6 +685,33 @@ O arquivo esperado e:
 
 ```powershell
 Get-Content "$env:USERPROFILE\hello_world.md"
+```
+
+Teste manual de lembrete em background:
+
+```bash
+argos start
+```
+
+Em outro terminal:
+
+```bash
+argos
+```
+
+No modo interativo:
+
+```text
+argos: argos me lembre que daqui 1 minutos testar o scheduler em background
+Executar esta acao? [s/N]: s
+argos: exit
+```
+
+Depois aguarde o horario vencer e confira:
+
+```bash
+argos jobs list
+Get-Content "$env:USERPROFILE\.argos\logs\notifications.log" -Tail 5
 ```
 
 Teste manual de memoria:

@@ -24,6 +24,7 @@ class AppConfig(BaseModel):
     )
     gateway_host: Literal["127.0.0.1"] = "127.0.0.1"
     gateway_port: int = Field(default=17831, ge=1024, le=65535)
+    job_scheduler_interval_seconds: float = Field(default=5.0, ge=0.1, le=3600.0)
     gateway_token_file: Path = Field(
         default_factory=lambda: Path(
             os.environ.get(
@@ -132,6 +133,7 @@ class AppConfig(BaseModel):
             "ARGOS_HOME": "argos_home",
             "ARGOS_GATEWAY_HOST": "gateway_host",
             "ARGOS_GATEWAY_PORT": "gateway_port",
+            "ARGOS_JOB_SCHEDULER_INTERVAL_SECONDS": "job_scheduler_interval_seconds",
             "ARGOS_GATEWAY_TOKEN_FILE": "gateway_token_file",
             "ARGOS_GATEWAY_PID_FILE": "gateway_pid_file",
             "ARGOS_GATEWAY_LOG_FILE": "gateway_log_file",

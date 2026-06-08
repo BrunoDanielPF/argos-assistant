@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from time import monotonic
 
 from fastapi import Depends, FastAPI, Header, HTTPException
@@ -17,9 +18,20 @@ def create_gateway_app(
     token_store: LocalTokenStore,
     repository: SessionRepository,
     model_name: str,
+    scheduler=None,
     version: str = "0.1.0",
 ) -> FastAPI:
-    app = FastAPI(title="Argos Gateway", version=version)
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        if scheduler is not None:
+            scheduler.start()
+        try:
+            yield
+        finally:
+            if scheduler is not None:
+                scheduler.stop()
+
+    app = FastAPI(title="Argos Gateway", version=version, lifespan=lifespan)
     started_at = monotonic()
 
     def authenticate(authorization: str | None = Header(default=None)) -> None:
@@ -40,6 +52,7 @@ def create_gateway_app(
             "version": version,
             "model": model_name,
             "uptime_seconds": max(0.0, monotonic() - started_at),
+            "jobs_scheduler": "enabled" if scheduler is not None else "disabled",
         }
 
     @app.post(

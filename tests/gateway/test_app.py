@@ -26,6 +26,18 @@ class FakeGatewayService:
         )
 
 
+class FakeScheduler:
+    def __init__(self):
+        self.started = 0
+        self.stopped = 0
+
+    def start(self):
+        self.started += 1
+
+    def stop(self):
+        self.stopped += 1
+
+
 def build_client(tmp_path):
     token_store = LocalTokenStore(
         tmp_path / "gateway.token",
@@ -80,6 +92,34 @@ def test_chat_returns_runtime_contract(tmp_path):
     assert response.json()["session_id"] == "default"
     assert response.json()["message"] == "handled oi"
     assert response.json()["run_id"]
+    repository.close()
+
+
+def test_gateway_lifecycle_starts_and_stops_scheduler(tmp_path):
+    token_store = LocalTokenStore(
+        tmp_path / "gateway.token",
+        permission_hardener=lambda path: None,
+    )
+    token = token_store.get_or_create()
+    repository = SessionRepository(tmp_path / "argos.db")
+    scheduler = FakeScheduler()
+    app = create_gateway_app(
+        service=FakeGatewayService(),
+        token_store=token_store,
+        repository=repository,
+        model_name="test-model",
+        scheduler=scheduler,
+    )
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(
+            "/v1/status",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.json()["jobs_scheduler"] == "enabled"
+    assert scheduler.started == 1
+    assert scheduler.stopped == 1
     repository.close()
 
 
