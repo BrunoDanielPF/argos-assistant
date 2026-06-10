@@ -1,110 +1,129 @@
 # Argos
 
-Argos é um assistente pessoal local para Windows, pensado para transformar o computador em um ambiente mais inteligente, organizado, automatizável e seguro.
+> **Um assistente local para transformar o computador em um ambiente mais contextual, organizado, automatizável e seguro.**
 
-A proposta do Argos não é apenas responder perguntas. A proposta é permitir que o usuário converse com o próprio computador, peça ajuda em linguagem natural, delegue pequenas ações, crie rotinas, receba alertas, mantenha contexto entre sessões e continue no controle de tudo que pode alterar arquivos, executar comandos ou afetar o ambiente local.
+Argos nasce com uma ideia simples: o usuário deveria conseguir conversar com o próprio computador, pedir ajuda em linguagem natural, organizar o ambiente, criar rotinas e executar ações locais sem perder controle sobre o que está acontecendo.
 
-Em sua forma final, o Argos deve funcionar como uma camada de assistência sobre o sistema operacional: um copiloto local que entende o ambiente do usuário, aprende preferências com autorização, ajuda a operar projetos e arquivos, propõe automações úteis e executa ações de forma segura, rastreável e reversível sempre que possível.
+O objetivo final não é criar apenas uma CLI inteligente. O objetivo é construir uma camada de assistência local, residente e confiável para o uso diário do computador.
 
-## Objetivo final
+---
 
-O objetivo final do Argos é ser um assistente local residente, capaz de acompanhar a jornada diária do usuário no computador.
+## Visão executiva
 
-Ele deve ajudar o usuário a:
+O Argos deve evoluir para ser um copiloto local do usuário: um assistente que entende contexto, lembra decisões importantes com autorização, sugere próximos passos, ajuda a operar arquivos e projetos, automatiza rotinas aprovadas e mantém tudo explicável.
 
-- iniciar o dia com contexto sobre tarefas, projetos e pendências;
-- encontrar arquivos, pastas, programas e informações locais sem depender de navegação manual;
-- organizar documentos e downloads com sugestões claras;
-- lembrar preferências, decisões e procedimentos importantes;
-- automatizar rotinas repetitivas sem abrir mão de aprovação humana;
-- monitorar eventos importantes, como falhas, jobs, arquivos novos ou tarefas recorrentes;
-- explicar o que aconteceu quando algo falhar;
-- sugerir recuperação segura em vez de apenas interromper a experiência;
-- manter um histórico compreensível do que foi feito, quando foi feito e com qual autorização.
+```mermaid
+flowchart LR
+    user["Usuário"] --> intent["Expressa uma intenção"]
+    intent --> argos["Argos entende o contexto"]
+    argos --> suggest["Sugere ou planeja uma ação"]
+    suggest --> approval{"Existe impacto real?"}
+    approval -->|Não| execute["Executa ou responde"]
+    approval -->|Sim| confirm["Pede confirmação"]
+    confirm --> execute
+    execute --> audit["Registra o que foi feito"]
+    audit --> learn["Aprende padrões com autorização"]
+    learn --> user
+```
 
-O Argos deve evoluir para ser menos uma ferramenta de comando e mais um ambiente de apoio contínuo ao uso do computador.
-
-## Promessa do produto
-
-A promessa do Argos é:
+A promessa do produto é:
 
 > **Ajudar o usuário a operar o próprio computador com mais contexto, menos repetição e mais segurança.**
 
-Isso significa que o Argos deve ser útil sem ser invasivo, autônomo sem ser imprevisível e inteligente sem tirar o controle do usuário.
+---
 
-O usuário deve sentir que o Argos:
+## O que o Argos quer resolver
 
-- entende o que ele está tentando fazer;
-- lembra do que é importante, mas não guarda informações sensíveis;
-- sugere próximos passos úteis;
-- pede confirmação antes de ações com impacto real;
-- explica suas decisões de forma clara;
-- consegue ser corrigido e melhorar com o uso;
-- não depende obrigatoriamente de nuvem para funcionar;
-- respeita o ambiente local como espaço privado do usuário.
+Computadores acumulam arquivos, projetos, comandos, ferramentas, notas, downloads, tarefas e decisões. Grande parte do esforço diário não está em fazer uma única ação complexa, mas em lembrar onde as coisas estão, repetir pequenas rotinas, recuperar contexto e evitar erros operacionais.
+
+O Argos busca reduzir esse atrito.
+
+| Dor do usuário | Experiência esperada com o Argos |
+|---|---|
+| “Não lembro onde está aquele arquivo.” | O Argos ajuda a encontrar e abrir o item correto. |
+| “Faço sempre os mesmos passos.” | O Argos sugere transformar o padrão em rotina aprovada. |
+| “Não sei o que estava fazendo neste projeto.” | O Argos recupera contexto, decisões e pendências relevantes. |
+| “Tenho medo de um agente mexer sozinho no meu PC.” | O Argos pede confirmação para ações sensíveis e registra tudo. |
+| “Quando algo falha, perco tempo entendendo o erro.” | O Argos explica a falha e sugere recuperação segura. |
+
+---
 
 ## Jornada de uso esperada
 
-A experiência do Argos deve ser construída em torno da jornada real do usuário no computador, não em torno de uma lista de comandos.
+O Argos deve ser pensado pela jornada do usuário, não por uma lista de comandos.
+
+```mermaid
+journey
+    title Jornada esperada do usuário com o Argos
+    section Primeiro contato
+      Configurar ambiente com orientação: 4: Usuário
+      Entender permissões e limites: 5: Usuário
+    section Uso diário
+      Pedir ajuda em linguagem natural: 5: Usuário
+      Encontrar arquivos e abrir ferramentas: 5: Usuário
+      Receber sugestões úteis: 4: Usuário
+    section Evolução
+      Aprovar memórias importantes: 4: Usuário
+      Transformar padrões em rotinas: 5: Usuário
+      Receber alertas e resumos: 4: Usuário
+    section Confiança
+      Confirmar ações sensíveis: 5: Usuário
+      Consultar histórico do que foi feito: 5: Usuário
+      Recuperar falhas com segurança: 4: Usuário
+```
 
 ### 1. Primeiro contato
 
-No primeiro uso, o Argos deve ajudar o usuário a configurar um ambiente funcional sem exigir conhecimento técnico profundo.
+No primeiro uso, o Argos deve ajudar o usuário a configurar uma experiência inicial segura e funcional.
 
-A experiência esperada é:
+A expectativa é que o usuário não precise entender toda a arquitetura interna para começar. O Argos deve explicar de forma clara:
 
-```text
-Argos verifica o ambiente local.
-Argos identifica o que já está disponível.
-Argos sugere uma configuração inicial segura.
-Argos explica o que pode fazer e o que precisa de autorização.
-Usuário aprova o modo de funcionamento.
-```
-
-O objetivo desse momento é reduzir fricção. O usuário não deve precisar entender todos os detalhes internos para começar. Ele deve conseguir aceitar uma configuração recomendada e ajustar depois, se quiser.
+- o que consegue fazer;
+- o que precisa de autorização;
+- quais limites de segurança existem;
+- como o usuário pode ajustar o comportamento depois.
 
 ### 2. Uso diário
 
-No uso diário, o Argos deve ajudar em tarefas simples e frequentes.
+No uso diário, o Argos deve funcionar como uma camada de apoio rápido.
 
-Exemplos de intenção:
+Exemplos de intenções:
 
 ```text
 Abra meu projeto principal.
 Encontre aquele PDF da faculdade.
 Crie uma nota com essas ideias.
-Organize esse arquivo na pasta certa.
 Mostre o que ficou pendente.
 Resuma o que aconteceu na última execução.
 ```
 
-A experiência deve ser natural. O usuário não deve precisar decorar muitos comandos. O Argos deve interpretar a intenção, propor um caminho e confirmar quando houver risco.
+O usuário não deve precisar decorar muitos comandos. A interação deve começar pela intenção.
 
 ### 3. Organização do ambiente
 
-O Argos deve ajudar o usuário a manter o computador organizado.
+O Argos deve ajudar o usuário a organizar arquivos, downloads, documentos, projetos e notas.
 
-Isso inclui arquivos, downloads, documentos, projetos, notas, ferramentas e rotinas.
+A expectativa não é que ele mova tudo sozinho. A expectativa é que ele observe padrões, sugira caminhos e peça autorização antes de alterar algo.
 
-A expectativa não é que o Argos mova tudo sozinho. A expectativa é que ele observe padrões, faça sugestões e peça autorização antes de alterar algo.
+```mermaid
+sequenceDiagram
+    participant U as Usuário
+    participant A as Argos
+    participant PC as Computador
 
-Exemplo:
-
-```text
-Detectei um novo PDF em Downloads.
-Ele parece ser um documento acadêmico.
-Posso sugerir uma pasta para organizar?
+    PC->>A: Novo arquivo aparece em Downloads
+    A->>A: Identifica possível tipo do arquivo
+    A->>U: Sugere uma organização
+    U->>A: Aprova ou recusa
+    A->>PC: Executa somente se aprovado
+    A->>U: Confirma o resultado
 ```
-
-Com o tempo, o usuário pode transformar sugestões recorrentes em automações aprovadas.
 
 ### 4. Trabalho com projetos
 
-Para projetos de desenvolvimento, estudo ou organização pessoal, o Argos deve funcionar como um assistente contextual.
+Para projetos de desenvolvimento, estudo ou organização pessoal, o Argos deve recuperar contexto e ajudar o usuário a continuar de onde parou.
 
-Ele deve conseguir entender que um projeto possui arquivos, decisões, comandos, problemas recorrentes, ferramentas e histórico.
-
-A expectativa é que o usuário possa perguntar:
+Perguntas esperadas:
 
 ```text
 O que eu estava fazendo neste projeto?
@@ -114,11 +133,11 @@ O que falhou na última vez?
 Qual arquivo parece estar relacionado com esse problema?
 ```
 
-O Argos deve responder usando contexto local, memórias aprovadas e histórico relevante, sem misturar informações de projetos diferentes.
+O Argos deve evitar misturar informações de projetos diferentes. Contexto precisa ter escopo.
 
 ### 5. Criação de rotinas
 
-A evolução natural do Argos é permitir que o usuário descreva rotinas em linguagem natural.
+O Argos deve permitir que o usuário descreva comportamentos desejados em linguagem natural.
 
 Exemplos:
 
@@ -129,156 +148,141 @@ Quando um job falhar, me avise e sugira recuperação.
 Quando eu abrir este projeto, verifique se há tarefas pendentes.
 ```
 
-Essas rotinas não devem nascer executando ações sensíveis automaticamente. Elas devem ser propostas, revisadas, aprovadas e só então ativadas.
-
-A expectativa é que o Argos ajude o usuário a programar comportamentos do computador sem precisar escrever scripts para tudo.
+Essas rotinas devem nascer como propostas revisáveis. O usuário deve conseguir entender o que será observado, o que será executado e quando será necessária confirmação.
 
 ### 6. Falhas e recuperação
 
-Quando algo falhar, o Argos não deve apenas exibir uma mensagem genérica de erro.
+Quando algo falhar, o Argos deve ajudar o usuário a entender o problema e escolher um caminho seguro.
 
-A experiência esperada é:
-
-```text
-O Argos identifica que houve uma falha.
-O Argos explica o tipo provável do problema.
-O Argos mostra opções seguras.
-O Argos pede autorização antes de tentar algo com efeito colateral.
-O Argos registra a tentativa para auditoria.
+```mermaid
+flowchart TD
+    fail["Algo falhou"] --> classify["Argos identifica o tipo provável da falha"]
+    classify --> explain["Explica o problema em linguagem clara"]
+    explain --> options["Mostra opções seguras"]
+    options --> risk{"A recuperação tem impacto real?"}
+    risk -->|Não| retry["Pode tentar novamente com limite"]
+    risk -->|Sim| approval["Pede autorização"]
+    approval --> action["Executa ação aprovada"]
+    retry --> audit["Registra tentativa"]
+    action --> audit
+    audit --> learn["Sugere aprendizado se a falha for recorrente"]
 ```
 
-Exemplo:
+O objetivo é que falhas não encerrem a experiência. Falhas devem iniciar diagnóstico, recuperação segura e aprendizado.
 
-```text
-O modelo local demorou para responder.
-Posso tentar novamente com uma configuração mais leve ou responder parcialmente agora.
+---
+
+## Experiência desejada
+
+A experiência final desejada pode ser resumida em cinco momentos.
+
+```mermaid
+flowchart LR
+    start["Iniciar"] --> understand["Entender contexto"]
+    understand --> help["Ajudar a agir"]
+    help --> automate["Automatizar com consentimento"]
+    automate --> explain["Explicar e auditar"]
+    explain --> adapt["Aprender com autorização"]
 ```
 
-O objetivo é transformar falhas em diagnóstico, recuperação e aprendizado.
+O Argos deve dar ao usuário a sensação de que o computador está mais organizado, mais acessível e mais previsível, sem parecer que uma automação invisível tomou controle do ambiente.
 
-## Como o Argos deve se comportar
+---
 
-O comportamento esperado do Argos deve seguir alguns princípios simples.
+## Princípios de produto
 
-### Deve ser claro
+| Princípio | Significado |
+|---|---|
+| Local-first | O ambiente do usuário deve ser tratado como espaço privado. |
+| Controle humano | Ações sensíveis exigem confirmação. |
+| Clareza | O usuário precisa entender o que será feito. |
+| Contexto | O Argos deve usar informações relevantes sem misturar escopos. |
+| Aprendizado com autorização | Preferências e decisões podem ser lembradas, mas com limites claros. |
+| Segurança operacional | O Argos deve evitar ações destrutivas, vazamento de segredos e automações imprevisíveis. |
+| Explicabilidade | O usuário deve conseguir saber o que aconteceu e por quê. |
 
-O usuário precisa entender o que o Argos pretende fazer.
+---
 
-Antes de alterar algo, o Argos deve explicar a ação em linguagem direta.
+## Modos de experiência
 
-### Deve ser cuidadoso
+O Argos deve crescer em três níveis de uso.
 
-Ações que escrevem, movem, apagam, executam comandos, instalam ferramentas ou mudam configurações devem exigir confirmação.
-
-### Deve ser útil sem ser invasivo
-
-O Argos pode sugerir, lembrar e automatizar, mas não deve assumir controle do computador sem permissão.
-
-### Deve aprender com autorização
-
-O Argos deve aprender preferências, decisões e padrões úteis, mas deve bloquear senhas, tokens, credenciais e dados sensíveis.
-
-### Deve ser local-first
-
-Sempre que possível, dados, memória, execução e configuração devem permanecer na máquina do usuário.
-
-### Deve ser explicável
-
-O usuário deve conseguir perguntar o que o Argos fez, por que fez e com base em qual autorização.
-
-## Expectativas de usabilidade
-
-A usabilidade do Argos deve ser guiada por confiança.
-
-O usuário deve conseguir usar o Argos em três níveis:
+```mermaid
+flowchart TB
+    conversation["Modo conversa\nAjuda, orientação e respostas"] --> assisted["Modo assistido\nAções locais com confirmação"]
+    assisted --> resident["Modo residente\nRotinas aprovadas, alertas e contexto contínuo"]
+```
 
 ### Modo conversa
 
-O usuário pede ajuda, tira dúvidas, resume informações e recebe orientação.
-
-Nesse modo, o Argos não executa ações com efeito real sem confirmação.
+O usuário pede ajuda, tira dúvidas, resume informações e recebe orientação. Nesse modo, o Argos não deve realizar ações com efeito real sem confirmação.
 
 ### Modo assistido
 
-O usuário pede uma ação local, como abrir arquivo, criar nota, buscar documento ou preparar uma rotina.
-
-O Argos interpreta, mostra o plano quando necessário e pede aprovação para ações sensíveis.
+O usuário pede uma ação local, como abrir arquivo, criar nota, buscar documento ou preparar uma rotina. O Argos interpreta, mostra o plano quando necessário e pede aprovação para ações sensíveis.
 
 ### Modo residente
 
-O Argos acompanha eventos locais, executa rotinas aprovadas, envia notificações e ajuda o usuário a manter o ambiente organizado.
+O Argos acompanha eventos locais, executa rotinas aprovadas, envia notificações e ajuda o usuário a manter o ambiente organizado. Mesmo nesse modo, ações sensíveis continuam passando por política e autorização.
 
-Mesmo nesse modo, ações sensíveis continuam exigindo política e autorização.
+---
 
 ## O que o Argos não deve ser
 
-O Argos não deve ser um executor cego de comandos.
-
-Também não deve ser um agente que decide sozinho alterar o computador do usuário.
+O Argos não deve ser um executor cego de comandos nem um agente que decide sozinho alterar o computador do usuário.
 
 Ele não deve:
 
-- salvar segredos como memória;
+- salvar senhas, tokens ou credenciais como memória;
 - executar comandos destrutivos automaticamente;
 - mover ou apagar arquivos sem confirmação;
 - instalar ferramentas sem aprovação;
 - habilitar automações sem revisão;
 - esconder do usuário o que fez;
 - depender de um único modelo ou provedor como base permanente;
-- misturar linguagem técnica com experiência de produto para o usuário final.
+- misturar documentação executiva com detalhes técnicos de implementação.
 
-## Experiência final desejada
+---
 
-A experiência final desejada é que o usuário possa abrir o computador e contar com o Argos como uma camada de apoio contínua.
+## Objetivo final
 
-Um cenário ideal:
+O objetivo final do Argos é ser uma camada local de assistência contínua para o computador pessoal.
+
+Em um cenário ideal:
 
 ```text
 O usuário inicia o computador.
-Argos apresenta um resumo curto do dia.
-Argos mostra pendências relevantes.
-Argos lembra o contexto dos projetos ativos.
-Argos sugere ações úteis.
+Argos apresenta um resumo curto e útil.
+Argos lembra contexto dos projetos ativos.
+Argos sugere ações relevantes.
 Argos observa eventos aprovados.
 Argos pede confirmação para ações sensíveis.
 Argos registra o que executou.
 Argos aprende padrões com autorização.
 ```
 
-O Argos deve reduzir esforço operacional, diminuir repetição e aumentar a sensação de controle sobre o ambiente local.
-
-## Direção do produto
-
-A direção do produto é construir um assistente local que combine:
-
-- conversa natural;
-- contexto do ambiente;
-- memória segura;
-- automações aprovadas;
-- execução controlada;
-- recuperação de falhas;
-- rastreabilidade;
-- adaptação ao usuário;
-- funcionamento local sempre que possível.
-
-Essa direção pode ser resumida assim:
+A direção pode ser resumida assim:
 
 > **Argos deve entender o ambiente, ajudar o usuário a agir, automatizar com consentimento e manter tudo explicável.**
 
+---
+
 ## Documentação técnica
 
-Este documento descreve a visão executiva, a jornada de uso e as expectativas do produto.
+Este README descreve a visão executiva, a jornada de uso e as expectativas do produto.
 
-Detalhes técnicos, arquitetura interna, fluxos, módulos, decisões de implementação e critérios de aceite devem ficar separados em:
+Detalhes de arquitetura, módulos internos, fluxos técnicos, decisões de implementação e critérios de aceite devem ficar em:
 
 ```text
 docs/ARCHITECTURE.md
 ```
 
-Essa separação é intencional: o README deve explicar o produto e a experiência esperada; a documentação técnica deve explicar como o Argos será construído.
+Essa separação é intencional: o README explica a experiência desejada; a documentação técnica explica como essa experiência será construída.
 
-## Status do projeto
+---
+
+## Status
 
 O Argos está em construção ativa.
 
-A versão atual deve ser entendida como uma base inicial para validar a experiência de um assistente local controlado pelo usuário. A expectativa do projeto é evoluir gradualmente até se tornar um assistente residente, seguro e contextual para o computador pessoal.
+A versão atual deve ser entendida como uma base inicial para validar a experiência de um assistente local controlado pelo usuário. O objetivo é evoluir gradualmente até uma experiência residente, segura, contextual e útil para o uso diário do computador.
