@@ -1,795 +1,284 @@
 # Argos
 
-Argos e um assistente pessoal local para Windows, construido em Python e integrado ao Ollama.
-
-O objetivo do projeto e evoluir de uma CLI inteligente para um assistente assincrono residente no computador, capaz de ser acionado por voz, responder por voz, configurar ferramentas locais e executar tarefas na maquina pessoal com controle de seguranca.
-
-## Contexto
-
-Argos nasce como um assistente offline-first. A primeira versao roda no terminal, usa um modelo local leve via Ollama e ja possui uma base modular para planejar comandos, aplicar politica de permissao e executar acoes locais.
-
-A direcao do produto e transformar esse nucleo em um assistente de computador:
-
-- acionamento por CLI hoje e por voz/hotkey no roadmap
-- resposta por texto hoje e por voz no roadmap
-- uso local e offline sempre que o modelo e as ferramentas estiverem disponiveis na maquina
-- preferencia por modelos menores e mais eficientes para resposta rapida no computador pessoal
-- inteligencia para configurar tools, skills e MCPs
-- capacidade de chamar programas, abrir arquivos, pesquisar arquivos e operar ferramentas locais
-- memoria progressiva para aprender preferencias, correcoes e procedimentos recorrentes
-- execucao controlada por politica de seguranca antes de qualquer efeito colateral relevante
-
-## Estado atual
-
-O MVP atual entrega:
-
-- comando principal `argos`
-- modo one-shot com `argos chat "..."`
-- modo interativo no terminal
-- integracao com Ollama usando modelo local
-- abertura de URLs
-- abertura de aplicativos conhecidos
-- abertura de arquivos
-- criacao segura de arquivos com confirmacao
-- busca de arquivos com confirmacao
-- abertura de resultado por indice no modo interativo
-- memoria curta de sessao
-- primeira versao de memoria persistente em Markdown
-- recuperacao de memorias persistentes relevantes antes do planejamento
-- clarificacoes contextuais respondidas por numero ou linguagem natural
-- resolucao de arquivos por nome parcial, extensao omitida ou erro de digitacao
-- edicao segura de arquivos existentes com modos substituir e adicionar
-- catalogo local de capabilities
-- planos multi-etapa simples para criar arquivo e abrir em seguida
-- politicas `allow`, `confirm` e `blocked`
-- loader de skills locais
-- adaptador MCP minimo
-- catalogo inicial de skills do projeto
-- Tool SDK com manifesto, schemas, lifecycle e catalogo dinamico
-- execucao de tools aprovadas por protocolo JSON em subprocesso
-- geracao de drafts de tools sem instalacao ou execucao automatica
-- capabilities especificas devem ser adicionadas pelo usuario via tools ou skills
-
-## Arquitetura
-
-O Argos separa interpretacao, memoria, seguranca e execucao. O modelo local pode responder ou propor acoes, mas nao acessa diretamente o sistema operacional. Toda acao passa pelo agente, pela politica e pelo executor.
-
-```mermaid
-flowchart LR
-    user["Usuario"] --> cli["CLI Argos<br/>Typer + Rich"]
-    cli --> agent["AssistantAgent<br/>orquestracao"]
-
-    agent <--> session["Memoria de sessao<br/>historico, contexto e sugestoes"]
-    agent --> longterm["Memoria persistente<br/>Markdown em ~/.argos/memory"]
-    longterm --> agent
-
-    agent --> planner["Planner<br/>heuristicas + validacao JSON"]
-    planner --> ollama["Ollama API"]
-    ollama --> model["argos-qwen3:4b"]
-    model --> ollama
-    ollama --> planner
-
-    planner --> agent
-    agent --> policy{"Politica de execucao"}
-    policy -->|allow| executor["ActionExecutor"]
-    policy -->|confirm| confirmation["Confirmacao do usuario"]
-    confirmation -->|aprovada| executor
-    confirmation -->|recusada| result["Resultado cancelado"]
-    policy -->|blocked| result
-
-    executor --> capabilities["Capabilities locais<br/>apps, URLs, arquivos e busca"]
-    capabilities --> windows["Windows e sistema de arquivos"]
-    executor --> result["Resultado da execucao"]
-    result --> agent
-    agent --> cli
-
-    skills["Skills locais<br/>consultivas no MVP"] -.-> planner
-    mcp["MCPClient minimo<br/>listagem e chamada de tools"] -.-> agent
-```
-
-As setas pontilhadas representam integracoes existentes em nivel inicial, mas que ainda nao participam automaticamente de todo planejamento.
-
-### Fluxo de conversa e planejamento
-
-```mermaid
-sequenceDiagram
-    actor U as Usuario
-    participant C as CLI
-    participant A as AssistantAgent
-    participant S as SessionMemory
-    participant M as LongTermMemory
-    participant P as Planner
-    participant O as Ollama
-
-    U->>C: Envia uma solicitacao
-    C->>A: handle(prompt)
-    A->>S: Le contexto e ate 10 mensagens anteriores
-    A->>S: Registra a mensagem atual
-    A->>M: Busca aprendizados relevantes
-    M-->>A: Memorias encontradas
-    A->>P: Prompt + contexto + historico + memorias
-
-    alt Heuristica local reconhece o comando
-        P-->>A: action ou plan
-    else Necessita do modelo
-        P->>C: Inicia indicador de processamento
-        P->>O: Mensagens e instrucoes JSON
-        O-->>P: answer, action ou plan
-        P->>C: Encerra indicador de processamento
-        P-->>A: Plano validado
-    end
-
-    A->>S: Registra resposta e sugestoes
-    A-->>C: Resultado
-    C-->>U: Exibe resposta
-```
-
-### Fluxo de execucao segura
-
-```mermaid
-flowchart TD
-    request["Planner retorna action ou plan"] --> agentAction["Agente seleciona a proxima capability"]
-    agentAction --> policyCheck{"Qual e a politica?"}
-
-    policyCheck -->|allow| execute["Executar capability"]
-    policyCheck -->|confirm| ask["Solicitar confirmacao<br/>sem loading ativo"]
-    policyCheck -->|blocked| blocked["Bloquear acao"]
-
-    ask -->|y, yes, s ou sim| execute
-    ask -->|nao ou cancelamento| cancelled["Cancelar acao"]
-
-    execute --> success{"Execucao funcionou?"}
-    success -->|sim| store["Registrar resultado,<br/>auditoria e contexto"]
-    success -->|nao| recovery["Gerar mensagem de erro<br/>ou recuperacao orientada"]
-
-    store --> more{"Existem mais etapas?"}
-    more -->|sim| agentAction
-    more -->|nao| response["Responder ao usuario"]
-    recovery --> response
-    blocked --> response
-    cancelled --> response
-```
-
-### Fluxo de edicao de arquivos
-
-```mermaid
-flowchart TD
-    requestEdit["Usuario pede para editar um arquivo"] --> extractEdit["Extrair referencia e novo texto"]
-    extractEdit --> modeKnown{"Modo de escrita esta claro?"}
-    modeKnown -->|nao| askMode["Perguntar: substituir ou adicionar?"]
-    askMode --> naturalAnswer["Resposta por numero, sinonimo ou frase natural"]
-    naturalAnswer --> confidence{"Interpretacao confiavel?"}
-    confidence -->|nao| askMode
-    confidence -->|sim| resolveName["Resolver nome aproximado"]
-    modeKnown -->|sim| resolveName
-
-    resolveName --> candidates{"Quantos candidatos plausiveis?"}
-    candidates -->|nenhum| askPath["Solicitar caminho completo"]
-    candidates -->|varios| askFile["Listar candidatos e perguntar qual usar"]
-    candidates -->|um| preview["Preparar operacao com caminho resolvido"]
-    askPath --> resolveName
-    askFile --> resolveName
-
-    preview --> confirmEdit["Pedir confirmacao"]
-    confirmEdit -->|aprovada| writeEdit["Substituir ou adicionar conteudo"]
-    confirmEdit -->|recusada| cancelEdit["Cancelar sem alterar arquivo"]
-    writeEdit --> validateEdit["Validar e responder"]
-```
-
-### Fluxo de memoria
-
-```mermaid
-flowchart TD
-    input["Mensagem do usuario"] --> memoryType{"Tipo de memoria"}
-
-    memoryType -->|Conversa normal| short["Memoria curta da sessao"]
-    short --> history["Historico, cwd,<br/>resultados e sugestoes"]
-    history --> plannerContext["Contexto enviado ao Planner"]
-
-    memoryType -->|/remember, lembre que,<br/>aprenda que ou corrigindo| validate["Validar aprendizado"]
-    validate --> sensitive{"Contem dado sensivel?"}
-    sensitive -->|sim| reject["Recusar persistencia"]
-    sensitive -->|nao| confirmMemory["Pedir confirmacao"]
-    confirmMemory -->|recusada| reject
-    confirmMemory -->|aprovada| markdown["Salvar em correcoes.md"]
-
-    markdown --> search["Busca lexical por relevancia"]
-    search --> plannerContext
-    plannerContext --> responseMemory["Resposta ou plano personalizado"]
-```
-
-## Estrategia de modelo
-
-O padrao do Argos deve priorizar eficiencia, baixa latencia e uso local confortavel. Por isso, o modelo operacional padrao e um modelo customizado no Ollama, atualmente `argos-qwen3:4b`, criado em cima de `qwen3:4b`.
-
-Diretrizes:
-
-- usar modelo pequeno para comandos, planejamento simples, CLI e automacao local
-- manter persona e regras estaveis no `Modelfile`
-- reservar modelos maiores para tarefas mais complexas, benchmark ou fallback configuravel
-- manter o modelo configuravel para permitir troca conforme hardware e qualidade desejada
-- medir qualidade por planejamento correto, JSON valido, latencia e consumo de recursos
-
-Modelo recomendado para o MVP:
-
-- padrao: `argos-qwen3:4b`
-- base do modelo customizado: `qwen3:4b`
-- alternativa mais forte: `qwen3:8b`
-
-Opcoes de runtime usadas pelo Argos:
-
-- `keep_alive`: `10m`, para manter o modelo carregado depois da primeira chamada
-- `format`: `json`, para reduzir respostas fora do schema esperado
-- `think`: `false`, para evitar custo extra de raciocinio em comandos curtos
-- `num_predict`: `512`, para limitar respostas longas sem truncar JSON estruturado
-- `num_ctx`: `4096`, para manter contexto suficiente sem custo excessivo
-
-Camadas de customizacao:
-
-- `Modelfile`: persona, idioma, formato JSON, parametros e regras estaveis
-- memoria Markdown: preferencias, correcoes e aprendizados que mudam com o tempo
-- LoRA/QLoRA futuro: padroes estaveis de tool-use, planejamento e estilo apos coleta de dataset
-
-## Memoria progressiva
-
-Argos deve evoluir para ter memoria de longo prazo semelhante a outros assistentes modernos. Quando o usuario corrigir uma resposta, ensinar uma preferencia ou definir um procedimento recorrente, o Argos deve propor salvar esse aprendizado.
-
-Modelo de memoria planejado:
-
-- memoria curta: contexto da sessao atual
-- memoria longa: arquivos Markdown semanticos na pasta do usuario
-- pasta sugerida: `%USERPROFILE%\.argos\memory`
-- arquivos por tema, como `preferencias.md`, `projetos.md`, `ferramentas.md`, `comandos.md` e `correcoes.md`
-
-Regras:
-
-- nunca salvar segredos, tokens, senhas ou dados sensiveis
-- pedir confirmacao antes de persistir memoria
-- registrar aprendizados pequenos, objetivos e verificaveis
-- recuperar memorias relevantes semanticamente antes de planejar respostas ou acoes
-- manter o usuario capaz de ler, editar e apagar as memorias manualmente
-
-Implementacao atual:
-
-- comando interativo `/remember <aprendizado>`
-- atalhos em linguagem natural: `lembre que ...`, `aprenda que ...` e `corrigindo: ...`
-- confirmacao antes de salvar
-- escrita em `%USERPROFILE%\.argos\memory\correcoes.md`
-- bloqueio simples para conteudo sensivel como senha, token, secret ou chave privada
-- comando `/memory` para listar memorias persistentes
-- busca lexical simples para injetar memorias relevantes no contexto do planner
-
-## Orquestracao de workflows
-
-Argos deve manter o core atual simples enquanto o produto ainda esta focado em CLI, tools locais e memoria. A integracao com LangGraph deve entrar de forma incremental quando o projeto chegar em tarefas assincronas, modo residente, checkpoints, retomada de execucao e human-in-the-loop.
-
-Decisao atual:
-
-- nao reescrever o nucleo em LangChain agora
-- manter planner, policy, executor e memoria com fronteiras proprias
-- avaliar LangGraph como orquestrador para o modo residente
-- usar LangChain somente quando uma integracao concreta justificar a dependencia
-
-Fluxo futuro esperado:
-
-```mermaid
-flowchart LR
-    inputFuture["CLI, voz ou hotkey"] --> resident["Servico residente"]
-    resident --> contextFuture["Carregar contexto e memoria"]
-    contextFuture --> workflow["Workflow duravel<br/>LangGraph em avaliacao"]
-    workflow --> planFuture["Planejar"]
-    planFuture --> policyFuture{"Aplicar politica"}
-    policyFuture -->|confirm| humanFuture["Human-in-the-loop"]
-    policyFuture -->|allow| toolFuture["Executar tool local ou MCP"]
-    humanFuture -->|aprovado| toolFuture
-    toolFuture --> checkpoint["Salvar checkpoint,<br/>resultado ou aprendizado"]
-    checkpoint --> outputFuture["Responder por texto ou voz"]
-    checkpoint --> queue["Fila assincrona,<br/>logs e notificacoes"]
-```
-
-## Roadmap
-
-### Fase 1: CLI operacional
-
-- melhorar comandos interativos como `/help`, `/skills`, `/tools`, `/model` e `/history`
-- exibir resultados de busca com indices mais claros
-- adicionar simulacao de comandos antes da execucao
-- melhorar sugestoes contextuais
-- integrar skills no prompt do planner
-- melhorar consulta da memoria persistente com ranking semantico
-
-### Fase 2: Tools e automacao local
-
-- expandir `open_application` com catalogo configuravel de programas
-- adicionar execucao controlada de comandos shell
-- criar configuracao local para tools, paths e aliases
-- permitir que Argos configure ferramentas pessoais com validacao
-- melhorar suporte a MCP servers locais
-- criar escrita controlada de memoria em Markdown
-
-### Fase 3: Voz e assistente residente
-
-- avaliar introducao incremental de LangGraph para workflows duraveis
-- adicionar entrada por voz com STT local
-- adicionar resposta por voz com TTS local
-- criar acionamento por hotkey ou wake command
-- rodar Argos em segundo plano
-- manter estado entre sessoes
-- permitir tarefas assincronas com fila, logs e notificacoes
-- usar memoria persistente para personalizar respostas e acoes
-
-### Fase 4: Inteligencia, avaliacao e tuning
-
-- gerar datasets de comandos, planos e respostas
-- criar curadoria de dataset
-- comparar modelos locais por benchmark
-- medir latencia e uso de recursos
-- preparar LoRA/QLoRA para especializacao futura
-- avaliar recuperacao semantica da memoria persistente
-
-## Requisitos
-
-- Python 3.12
-- Ollama rodando localmente
-- modelo base `qwen3:4b`
-- modelo customizado `argos-qwen3:4b`
-
-## Setup
-
-```bash
-python -m venv .venv
-.venv\Scripts\activate
-pip install -e .[dev]
-ollama pull qwen3:4b
-ollama create argos-qwen3:4b -f models/argos-qwen3-4b.Modelfile
-```
-
-## Uso
-
-### Servico residente
-
-O modo padrao usa o Argos Gateway local para manter a mesma sessao entre
-terminais e reinicios do cliente:
-
-```bash
-argos start
-argos status
-argos
-argos stop
-```
-
-Comandos enviados por `argos`, `argos interactive` e `argos chat` usam a
-sessao `default`. Para separar contextos:
-
-```bash
-argos chat --session projeto-x "continue o projeto"
-argos interactive --session projeto-x
-```
-
-O gateway aceita conexoes somente em `127.0.0.1` e exige um token local. O
-estado padrao fica em `~/.argos`:
+Argos é um assistente pessoal local para Windows, pensado para transformar o computador em um ambiente mais inteligente, organizado, automatizável e seguro.
+
+A proposta do Argos não é apenas responder perguntas. A proposta é permitir que o usuário converse com o próprio computador, peça ajuda em linguagem natural, delegue pequenas ações, crie rotinas, receba alertas, mantenha contexto entre sessões e continue no controle de tudo que pode alterar arquivos, executar comandos ou afetar o ambiente local.
+
+Em sua forma final, o Argos deve funcionar como uma camada de assistência sobre o sistema operacional: um copiloto local que entende o ambiente do usuário, aprende preferências com autorização, ajuda a operar projetos e arquivos, propõe automações úteis e executa ações de forma segura, rastreável e reversível sempre que possível.
+
+## Objetivo final
+
+O objetivo final do Argos é ser um assistente local residente, capaz de acompanhar a jornada diária do usuário no computador.
+
+Ele deve ajudar o usuário a:
+
+- iniciar o dia com contexto sobre tarefas, projetos e pendências;
+- encontrar arquivos, pastas, programas e informações locais sem depender de navegação manual;
+- organizar documentos e downloads com sugestões claras;
+- lembrar preferências, decisões e procedimentos importantes;
+- automatizar rotinas repetitivas sem abrir mão de aprovação humana;
+- monitorar eventos importantes, como falhas, jobs, arquivos novos ou tarefas recorrentes;
+- explicar o que aconteceu quando algo falhar;
+- sugerir recuperação segura em vez de apenas interromper a experiência;
+- manter um histórico compreensível do que foi feito, quando foi feito e com qual autorização.
+
+O Argos deve evoluir para ser menos uma ferramenta de comando e mais um ambiente de apoio contínuo ao uso do computador.
+
+## Promessa do produto
+
+A promessa do Argos é:
+
+> **Ajudar o usuário a operar o próprio computador com mais contexto, menos repetição e mais segurança.**
+
+Isso significa que o Argos deve ser útil sem ser invasivo, autônomo sem ser imprevisível e inteligente sem tirar o controle do usuário.
+
+O usuário deve sentir que o Argos:
+
+- entende o que ele está tentando fazer;
+- lembra do que é importante, mas não guarda informações sensíveis;
+- sugere próximos passos úteis;
+- pede confirmação antes de ações com impacto real;
+- explica suas decisões de forma clara;
+- consegue ser corrigido e melhorar com o uso;
+- não depende obrigatoriamente de nuvem para funcionar;
+- respeita o ambiente local como espaço privado do usuário.
+
+## Jornada de uso esperada
+
+A experiência do Argos deve ser construída em torno da jornada real do usuário no computador, não em torno de uma lista de comandos.
+
+### 1. Primeiro contato
+
+No primeiro uso, o Argos deve ajudar o usuário a configurar um ambiente funcional sem exigir conhecimento técnico profundo.
+
+A experiência esperada é:
 
 ```text
-config.yaml
-argos.db
-gateway.token
-gateway.pid
-logs/gateway.log
-logs/events.jsonl
+Argos verifica o ambiente local.
+Argos identifica o que já está disponível.
+Argos sugere uma configuração inicial segura.
+Argos explica o que pode fazer e o que precisa de autorização.
+Usuário aprova o modo de funcionamento.
 ```
 
-Para diagnostico, recuperacao ou uso sem o servico residente:
+O objetivo desse momento é reduzir fricção. O usuário não deve precisar entender todos os detalhes internos para começar. Ele deve conseguir aceitar uma configuração recomendada e ajustar depois, se quiser.
 
-```bash
-argos --direct
-argos chat --direct "oi"
-argos interactive --direct
-```
+### 2. Uso diário
 
-O Argos nao troca silenciosamente para o modo direto quando o gateway esta
-indisponivel, pois isso criaria uma sessao diferente.
+No uso diário, o Argos deve ajudar em tarefas simples e frequentes.
 
-### Jobs locais
-
-A Fase 2 iniciou a fundacao de jobs persistentes em SQLite. Nesta etapa, o
-Argos ja consegue registrar, consultar, cancelar, reenfileirar e executar jobs
-vencidos pelo gateway residente. Pedidos simples de lembrete, como "me lembre
-que daqui 10 minutos...", viram jobs agendados com `scheduled_for`; quando o
-horario chega, o scheduler do gateway marca o job como concluido e registra uma
-notificacao local em `~/.argos/logs/notifications.log`.
-
-```bash
-argos jobs list
-argos jobs show <job_id>
-argos jobs retry <job_id>
-argos jobs cancel <job_id>
-```
-
-Estados atuais: `queued`, `running`, `waiting_confirmation`, `succeeded`,
-`failed`, `cancelled` e `cancelling`.
-
-Teste manual de lembrete:
-
-```bash
-argos
-```
-
-No modo interativo:
+Exemplos de intenção:
 
 ```text
-argos: argos me lembre que daqui 10 minutos precisamos criar um documento para iniciar a especificacao de requisitos
-Executar esta acao? [s/N]: s
-argos: exit
+Abra meu projeto principal.
+Encontre aquele PDF da faculdade.
+Crie uma nota com essas ideias.
+Organize esse arquivo na pasta certa.
+Mostre o que ficou pendente.
+Resuma o que aconteceu na última execução.
 ```
 
-Depois confira o job persistido:
+A experiência deve ser natural. O usuário não deve precisar decorar muitos comandos. O Argos deve interpretar a intenção, propor um caminho e confirmar quando houver risco.
 
-```bash
-argos jobs list
-argos jobs show <job_id>
-```
+### 3. Organização do ambiente
 
-Configuracao minima opcional em `~/.argos/config.yaml`:
+O Argos deve ajudar o usuário a manter o computador organizado.
 
-```yaml
-schema_version: "1.0"
-model: argos-qwen3:4b
-gateway_host: 127.0.0.1
-gateway_port: 17831
-job_scheduler_interval_seconds: 5
-```
+Isso inclui arquivos, downloads, documentos, projetos, notas, ferramentas e rotinas.
 
-Se a porta estiver ocupada, altere `gateway_port` e reinicie o servico. Se o
-Ollama estiver indisponivel, o gateway permanece diagnosticavel por
-`argos status`, mas requisicoes ao modelo falharao ate o Ollama voltar.
+A expectativa não é que o Argos mova tudo sozinho. A expectativa é que ele observe padrões, faça sugestões e peça autorização antes de alterar algo.
 
-Use `argos` para conversa continua no terminal:
-
-```bash
-argos
-```
-
-Exemplos no modo interativo:
+Exemplo:
 
 ```text
-argos: oi
-argos: open calculator
-argos: vamos criar um markdown na pasta do meu usuario, esse arquivo markdown precisa ter hello world escrito
-argos: find README.md
-argos: /open 1
-argos: exit
+Detectei um novo PDF em Downloads.
+Ele parece ser um documento acadêmico.
+Posso sugerir uma pasta para organizar?
 ```
 
-Use `argos chat "..."` para uma unica solicitacao:
+Com o tempo, o usuário pode transformar sugestões recorrentes em automações aprovadas.
 
-```bash
-argos chat "open ollama website"
-argos chat "summarize what an MCP server is"
-argos chat "find README.md"
-```
+### 4. Trabalho com projetos
 
-O comando `assistant` ainda existe como alias de compatibilidade, mas o nome oficial do projeto e `argos`.
+Para projetos de desenvolvimento, estudo ou organização pessoal, o Argos deve funcionar como um assistente contextual.
 
-Durante chamadas ao modelo, a CLI mostra `Argos esta pensando...` enquanto aguarda a resposta. O indicador e encerrado antes de qualquer pedido de confirmacao, permitindo responder normalmente com `y`, `yes`, `s` ou `sim`.
+Ele deve conseguir entender que um projeto possui arquivos, decisões, comandos, problemas recorrentes, ferramentas e histórico.
 
-Quando uma acao sensivel e planejada pelo gateway, o Argos mostra a capacidade,
-os argumentos resumidos e as permissoes efetivas antes de executar. A
-confirmacao pendente fica persistida no banco local, pode ser retomada apos
-reiniciar o cliente ou o gateway e aceita apenas uma decisao. Interromper o
-terminal nao registra a acao como recusada nem executa a operacao.
-
-O contexto da sessao tambem guarda a tarefa ativa. Quando o usuario troca de
-assunto com expressoes como `esquece`, `muda de assunto` ou `agora quero`, a
-pendencia anterior e descartada antes do planejamento. Tools com argumentos
-incompletos sao bloqueadas antes da confirmacao e viram pedido de detalhes.
-
-No modo interativo, as 10 mensagens anteriores da sessao sao enviadas ao modelo. Isso permite continuar perguntas e instrucoes dependentes de contexto, por exemplo:
+A expectativa é que o usuário possa perguntar:
 
 ```text
-argos: quanto e 2 + 2?
-argos: e 4 + 4?
+O que eu estava fazendo neste projeto?
+Quais decisões importantes já tomamos?
+Como rodo esse ambiente?
+O que falhou na última vez?
+Qual arquivo parece estar relacionado com esse problema?
 ```
 
-Clarificacoes podem ser respondidas naturalmente. Os numeros apresentados sao apenas atalhos:
+O Argos deve responder usando contexto local, memórias aprovadas e histórico relevante, sem misturar informações de projetos diferentes.
+
+### 5. Criação de rotinas
+
+A evolução natural do Argos é permitir que o usuário descreva rotinas em linguagem natural.
+
+Exemplos:
 
 ```text
-argos: edite o arquivo hello_world colocando o texto ola mundo bruno
-argos: adicione no final sem apagar o que ja existe
+Todo dia de manhã, mostre um resumo das minhas pendências.
+Quando eu baixar um PDF, me pergunte se quero organizar.
+Quando um job falhar, me avise e sugira recuperação.
+Quando eu abrir este projeto, verifique se há tarefas pendentes.
 ```
 
-O Argos procura nomes sem extensao e pequenas variacoes de digitacao nos diretorios da sessao. Se encontrar varios arquivos parecidos, pergunta qual deles deve usar. Se nao encontrar nenhum, solicita o caminho completo e nao cria um arquivo automaticamente.
+Essas rotinas não devem nascer executando ações sensíveis automaticamente. Elas devem ser propostas, revisadas, aprovadas e só então ativadas.
 
-## Comandos interativos
+A expectativa é que o Argos ajude o usuário a programar comportamentos do computador sem precisar escrever scripts para tudo.
 
-- `/cwd <path>`: atualiza o diretorio de contexto da sessao
-- `/pwd`: mostra o diretorio atual da sessao
-- `/context`: mostra o contexto atual da sessao
-- `/history`: mostra o historico da sessao
-- `/open <path>`: abre um arquivo pelo caminho
-- `/open <indice>`: abre um item da ultima busca por indice
-- `/remember <aprendizado>`: salva um aprendizado confirmado na memoria persistente
-- `/memory`: lista memorias persistentes salvas
-- `exit` ou `quit`: encerra a sessao
+### 6. Falhas e recuperação
 
-## Skills do projeto
+Quando algo falhar, o Argos não deve apenas exibir uma mensagem genérica de erro.
 
-Argos carrega metadados de skills locais em `skills/<skill-name>/skill.yaml`. Cada skill tambem possui um `prompt.md` com orientacao operacional.
-
-Skills iniciais:
-
-- `project-architecture`
-- `mcp-server-creation`
-- `test-generation`
-- `internal-prompt-creation`
-- `dataset-generation`
-- `dataset-curation`
-- `model-benchmarking`
-- `performance-profiling`
-- `configuration-management`
-- `local-setup`
-- `cli-command-generation`
-- `project-security`
-- `command-simulation`
-- `documentation-maintenance`
-- `long-term-memory`
-- `workflow-orchestration`
-
-Nesta fase, as skills sao consultivas. Elas orientam planejamento, documentacao e geracao de artefatos, mas nao executam acoes locais nem ignoram a politica do executor.
-
-## Tool SDK
-
-Tools sao capacidades executaveis portateis. Cada tool declara contrato de entrada, saida, runtime e permissoes em `tool.yaml`. Diferente de uma skill, uma tool pode produzir efeitos na maquina e sempre passa por validacao, politica e confirmacao.
-
-```mermaid
-flowchart LR
-    request["Solicitacao do usuario"] --> catalog["Tool Catalog"]
-    catalog -->|tool habilitada| schema["Validar input schema"]
-    catalog -->|tool ausente| proposal["Propor nova tool"]
-    proposal --> draft["Gerar draft inativo"]
-    draft --> validation["Validar manifesto, schema e AST"]
-    validation --> review["Revisao e aprovacao do usuario"]
-    schema --> permissions["Expandir permissoes efetivas"]
-    permissions --> confirmation["Confirmacao"]
-    confirmation --> runner["Runner em subprocesso"]
-    runner --> output["Validar output schema"]
-    output --> audit["Auditoria JSONL"]
-```
-
-Lifecycle:
+A experiência esperada é:
 
 ```text
-draft -> validating -> validated -> approved -> installed -> enabled
+O Argos identifica que houve uma falha.
+O Argos explica o tipo provável do problema.
+O Argos mostra opções seguras.
+O Argos pede autorização antes de tentar algo com efeito colateral.
+O Argos registra a tentativa para auditoria.
 ```
 
-Estados alternativos: `rejected`, `disabled` e `broken`.
-
-Uma tool gerada pelo Argos permanece como `draft` e nao pode ser executada. A aprovacao, instalacao e habilitacao sao etapas separadas.
-
-### Estrutura de uma tool
+Exemplo:
 
 ```text
-minha-tool/
-├── tool.yaml
-├── handler.py
-├── requirements.lock
-└── tests/
+O modelo local demorou para responder.
+Posso tentar novamente com uma configuração mais leve ou responder parcialmente agora.
 ```
 
-O manifesto usa JSON Schema Draft 2020-12:
+O objetivo é transformar falhas em diagnóstico, recuperação e aprendizado.
 
-```yaml
-schema_version: "1.0"
-name: local.exemplo
-version: "1.0.0"
-runtime:
-  type: python
-  python: ">=3.12,<3.13"
-  entrypoint: handler.py
-input_schema:
-  $schema: https://json-schema.org/draft/2020-12/schema
-  type: object
-  additionalProperties: false
-output_schema:
-  $schema: https://json-schema.org/draft/2020-12/schema
-  type: object
-  additionalProperties: false
-permissions:
-  filesystem:
-    read: []
-    write: []
-  network:
-    enabled: false
-    hosts: []
-  subprocess:
-    executables: []
-execution:
-  timeout_seconds: 60
-  max_output_bytes: 1048576
-```
+## Como o Argos deve se comportar
 
-### Comandos de tools
+O comportamento esperado do Argos deve seguir alguns princípios simples.
 
-```bash
-argos tools list
-argos tools inspect local.exemplo
-argos tools validate caminho/para/tool
-argos tools register caminho/para/tool
-argos tools approve local.exemplo 1.0.0
-argos tools install caminho/para/tool
-argos tools enable local.exemplo 1.0.0
-argos tools disable local.exemplo 1.0.0
-argos tools generate definicao.json
-```
+### Deve ser claro
 
-Fluxo para uma tool criada pelo usuario:
+O usuário precisa entender o que o Argos pretende fazer.
+
+Antes de alterar algo, o Argos deve explicar a ação em linguagem direta.
+
+### Deve ser cuidadoso
+
+Ações que escrevem, movem, apagam, executam comandos, instalam ferramentas ou mudam configurações devem exigir confirmação.
+
+### Deve ser útil sem ser invasivo
+
+O Argos pode sugerir, lembrar e automatizar, mas não deve assumir controle do computador sem permissão.
+
+### Deve aprender com autorização
+
+O Argos deve aprender preferências, decisões e padrões úteis, mas deve bloquear senhas, tokens, credenciais e dados sensíveis.
+
+### Deve ser local-first
+
+Sempre que possível, dados, memória, execução e configuração devem permanecer na máquina do usuário.
+
+### Deve ser explicável
+
+O usuário deve conseguir perguntar o que o Argos fez, por que fez e com base em qual autorização.
+
+## Expectativas de usabilidade
+
+A usabilidade do Argos deve ser guiada por confiança.
+
+O usuário deve conseguir usar o Argos em três níveis:
+
+### Modo conversa
+
+O usuário pede ajuda, tira dúvidas, resume informações e recebe orientação.
+
+Nesse modo, o Argos não executa ações com efeito real sem confirmação.
+
+### Modo assistido
+
+O usuário pede uma ação local, como abrir arquivo, criar nota, buscar documento ou preparar uma rotina.
+
+O Argos interpreta, mostra o plano quando necessário e pede aprovação para ações sensíveis.
+
+### Modo residente
+
+O Argos acompanha eventos locais, executa rotinas aprovadas, envia notificações e ajuda o usuário a manter o ambiente organizado.
+
+Mesmo nesse modo, ações sensíveis continuam exigindo política e autorização.
+
+## O que o Argos não deve ser
+
+O Argos não deve ser um executor cego de comandos.
+
+Também não deve ser um agente que decide sozinho alterar o computador do usuário.
+
+Ele não deve:
+
+- salvar segredos como memória;
+- executar comandos destrutivos automaticamente;
+- mover ou apagar arquivos sem confirmação;
+- instalar ferramentas sem aprovação;
+- habilitar automações sem revisão;
+- esconder do usuário o que fez;
+- depender de um único modelo ou provedor como base permanente;
+- misturar linguagem técnica com experiência de produto para o usuário final.
+
+## Experiência final desejada
+
+A experiência final desejada é que o usuário possa abrir o computador e contar com o Argos como uma camada de apoio contínua.
+
+Um cenário ideal:
 
 ```text
-validate -> register -> approve -> install -> enable
+O usuário inicia o computador.
+Argos apresenta um resumo curto do dia.
+Argos mostra pendências relevantes.
+Argos lembra o contexto dos projetos ativos.
+Argos sugere ações úteis.
+Argos observa eventos aprovados.
+Argos pede confirmação para ações sensíveis.
+Argos registra o que executou.
+Argos aprende padrões com autorização.
 ```
 
-Dependencias devem estar fixadas em `requirements.lock` com hashes SHA-256. A instalacao usa `--require-hashes` e `--only-binary :all:`.
+O Argos deve reduzir esforço operacional, diminuir repetição e aumentar a sensação de controle sobre o ambiente local.
 
-### Limites de seguranca
+## Direção do produto
 
-O ambiente virtual isola dependencias, mas nao e uma sandbox. O MVP adiciona subprocesso separado, `shell=False`, timeout, ambiente filtrado, limite de output, validacao de schemas, permissoes declaradas, hashes e auditoria.
+A direção do produto é construir um assistente local que combine:
 
-Tools geradas ou nao aprovadas nao sao executadas. Uma evolucao futura deve usar Windows Job Objects e AppContainer ou Windows Sandbox para codigo nao confiavel.
+- conversa natural;
+- contexto do ambiente;
+- memória segura;
+- automações aprovadas;
+- execução controlada;
+- recuperação de falhas;
+- rastreabilidade;
+- adaptação ao usuário;
+- funcionamento local sempre que possível.
 
-## Seguranca
+Essa direção pode ser resumida assim:
 
-Argos separa raciocinio de execucao. O modelo local e o planner podem propor acoes, mas efeitos colaterais passam pelo executor e pela politica de permissao.
+> **Argos deve entender o ambiente, ajudar o usuário a agir, automatizar com consentimento e manter tudo explicável.**
 
-Classes de politica:
+## Documentação técnica
 
-- `allow`: acoes simples, como abrir URL, aplicativo conhecido ou arquivo
-- `confirm`: acoes sensiveis, como criar arquivo, agendar lembrete, busca de arquivos ou futuras operacoes shell
-- `blocked`: acoes destrutivas ou nao suportadas
+Este documento descreve a visão executiva, a jornada de uso e as expectativas do produto.
 
-Skills, MCPs e prompts internos nao devem executar diretamente acoes na maquina. Qualquer acao local deve passar pelo mesmo fluxo de politica e confirmacao.
-
-## Testes
-
-Rode a suite automatizada:
-
-```bash
-python -m pytest -q
-```
-
-Verifique a CLI:
-
-```bash
-argos --help
-```
-
-Smoke test manual:
-
-```bash
-argos chat "open ollama website"
-```
-
-Teste manual de criacao segura de arquivo:
-
-```bash
-argos
-```
-
-No modo interativo:
+Detalhes técnicos, arquitetura interna, fluxos, módulos, decisões de implementação e critérios de aceite devem ficar separados em:
 
 ```text
-argos: vamos criar um markdown na pasta do meu usuario, esse arquivo markdown precisa ter hello world escrito
-Execute this action? [y/N]: y
-argos: exit
+docs/ARCHITECTURE.md
 ```
 
-O arquivo esperado e:
+Essa separação é intencional: o README deve explicar o produto e a experiência esperada; a documentação técnica deve explicar como o Argos será construído.
 
-```powershell
-Get-Content "$env:USERPROFILE\hello_world.md"
-```
+## Status do projeto
 
-Teste manual de lembrete em background:
+O Argos está em construção ativa.
 
-```bash
-argos start
-```
-
-Em outro terminal:
-
-```bash
-argos
-```
-
-No modo interativo:
-
-```text
-argos: argos me lembre que daqui 1 minutos testar o scheduler em background
-Executar esta acao? [s/N]: s
-argos: exit
-```
-
-Depois aguarde o horario vencer e confira:
-
-```bash
-argos jobs list
-Get-Content "$env:USERPROFILE\.argos\logs\notifications.log" -Tail 5
-```
-
-Teste manual de memoria:
-
-```bash
-argos
-```
-
-No modo interativo:
-
-```text
-argos: lembre que eu prefiro respostas objetivas em portugues
-Save this memory? [y/N]: y
-argos: /memory
-argos: exit
-```
-
-Depois confira o arquivo:
-
-```powershell
-Get-Content "$env:USERPROFILE\.argos\memory\correcoes.md"
-```
-
-Depois de salvar uma memoria, prompts futuros usam memorias relevantes como contexto do planner. Exemplo:
-
-```text
-argos: como voce deve responder para mim?
-```
-
-## Ollama
-
-Se o comando `ollama` estiver disponivel:
-
-```bash
-ollama list
-ollama pull qwen3:4b
-ollama create argos-qwen3:4b -f models/argos-qwen3-4b.Modelfile
-```
-
-Se o daemon estiver ativo em `http://localhost:11434`, mas o comando `ollama` nao estiver no `PATH`, o modelo pode ser baixado pela API local:
-
-```powershell
-$body = @{ name = 'qwen3:4b'; stream = $false } | ConvertTo-Json
-Invoke-RestMethod -Uri 'http://localhost:11434/api/pull' -Method Post -ContentType 'application/json' -Body $body
-```
-
-Depois crie o modelo customizado usando o `Modelfile` versionado:
-
-```powershell
-$system = @'
-Voce e Argos, um assistente pessoal local offline-first para Windows.
-Responda em portugues por padrao.
-Seja objetivo, pratico e direto.
-Use memorias persistentes fornecidas no contexto como preferencias do usuario.
-Quando a solicitacao exigir uma acao local suportada, Retorne JSON valido no formato:
-{"mode":"action","capability":"<name>","arguments":{...}}
-Quando a solicitacao for uma pergunta ou explicacao, Retorne JSON valido no formato:
-{"mode":"answer","content":"<texto>"}
-Quando a solicitacao precisar de varias acoes em sequencia, Retorne JSON valido no formato:
-{"mode":"plan","steps":[{"capability":"<name>","arguments":{...}}]}
-Nao invente capabilities.
-Nao execute nem recomende acoes destrutivas sem confirmacao explicita.
-Nao salve ou exponha senhas, tokens, chaves privadas ou dados sensiveis.
-'@
-$body = @{
-  model = 'argos-qwen3:4b'
-  from = 'qwen3:4b'
-  system = $system
-  parameters = @{ temperature = 0.2; top_p = 0.9 }
-  stream = $false
-} | ConvertTo-Json -Depth 5
-Invoke-RestMethod -Uri 'http://localhost:11434/api/create' -Method Post -ContentType 'application/json' -Body $body
-```
-
-## Troubleshooting
-
-- `ollama` nao reconhecido: o CLI do Ollama nao esta instalado ou nao esta no `PATH`
-- `ConnectError` ou connection refused: o daemon do Ollama nao esta rodando em `localhost:11434`
-- `{"models":[]}` em `/api/tags`: o daemon esta ativo, mas nenhum modelo foi baixado
-- planner retornando formato inesperado: atualizar o codigo e repetir, pois o planner normaliza formatos comuns como `capability/arguments` e `action/<fields>`
-- primeira resposta lenta: normalmente e carregamento frio do modelo; as chamadas seguintes tendem a ser mais rapidas por causa de `keep_alive`
+A versão atual deve ser entendida como uma base inicial para validar a experiência de um assistente local controlado pelo usuário. A expectativa do projeto é evoluir gradualmente até se tornar um assistente residente, seguro e contextual para o computador pessoal.
