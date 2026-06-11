@@ -4,6 +4,11 @@ from pathlib import Path
 
 from assistant.execution.policy import decide_policy
 from assistant.files.resolver import FileResolver
+from assistant.intent.pending_resolver import (
+    HELP_RESPONSE,
+    PendingClarificationResolver,
+    PendingResolutionStatus,
+)
 from assistant.memory.models import MemoryRecord
 from assistant.memory.session import SessionMemory
 from assistant.models import AuditEvent
@@ -23,6 +28,7 @@ class AssistantAgent:
         action_validator: Callable[[str, dict], str | None] | None = None,
         confirmer: Callable[[str, dict], bool] | None = None,
         file_resolver: FileResolver | None = None,
+        pending_resolver: PendingClarificationResolver | None = None,
         recovery_engine=None,
     ) -> None:
         self._planner = planner
@@ -34,6 +40,7 @@ class AssistantAgent:
         self._action_validator = action_validator or (lambda capability, arguments: None)
         self._confirmer = confirmer
         self._file_resolver = file_resolver or FileResolver()
+        self._pending_resolver = pending_resolver or PendingClarificationResolver()
         self._recovery_engine = recovery_engine
 
     @property
@@ -450,6 +457,35 @@ class AssistantAgent:
         snapshot = self._memory.snapshot()
         previous_history = snapshot.get("history", [])
         snapshot_context = dict(snapshot.get("context") or {})
+        pending_value = snapshot_context.get("pending_clarification")
+        pending = pending_value if isinstance(pending_value, dict) else None
+        pending_resolution = self._pending_resolver.resolve(user_input, pending)
+        if pending_resolution.status == PendingResolutionStatus.HELP:
+            self._memory.clear_pending_clarification()
+            self._memory.add_user_message(user_input)
+            return self._build_answer_response(HELP_RESPONSE)
+        if pending_resolution.status == PendingResolutionStatus.CANCEL:
+            self._memory.clear_pending_clarification()
+            self._memory.add_user_message(user_input)
+            return self._build_answer_response("Operação cancelada.")
+        if pending_resolution.status == PendingResolutionStatus.NEW_INTENT:
+            self._memory.clear_pending_clarification()
+            snapshot_context["pending_clarification"] = None
+        if pending_resolution.status == PendingResolutionStatus.UNRESOLVED:
+            assert pending is not None
+            self._memory.add_user_message(user_input)
+            return self._build_clarification_response(
+                pending_resolution.question or str(pending.get("question")),
+                pending,
+            )
+        preplanned_action = None
+        if pending_resolution.status == PendingResolutionStatus.RESOLVED:
+            assert pending is not None
+            assert pending_resolution.value is not None
+            preplanned_action = self._pending_resolver.build_action(
+                pending,
+                pending_resolution.value,
+            )
         subject_was_reset = self._is_subject_reset_request(user_input)
         explicit_new_action = (
             snapshot_context.get("pending_clarification") is not None
@@ -461,33 +497,36 @@ class AssistantAgent:
             previous_history = []
         self._memory.add_user_message(user_input)
         try:
-            planner_params = inspect.signature(self._planner.create_plan).parameters
-            if "context" in planner_params:
-                context = dict(snapshot_context)
-                context["conversation_history"] = previous_history[-10:]
-                long_term_memories = []
-                if self._memory_engine is not None:
-                    try:
-                        structured_memories = self._memory_engine.retrieve(
-                            user_input,
-                            context,
-                        )
-                        long_term_memories = [
-                            self._memory_record_to_context(memory)
-                            for memory in structured_memories
-                        ]
-                    except Exception:
-                        long_term_memories = []
-                if not long_term_memories and self._long_term_memory is not None:
-                    long_term_memories = self._long_term_memory.search(user_input, max_results=5)
-                if long_term_memories:
-                    context["long_term_memories"] = long_term_memories
-                plan = self._planner.create_plan(
-                    user_input,
-                    context=context,
-                )
+            if preplanned_action is not None:
+                plan = preplanned_action
             else:
-                plan = self._planner.create_plan(user_input)
+                planner_params = inspect.signature(self._planner.create_plan).parameters
+                if "context" in planner_params:
+                    context = dict(snapshot_context)
+                    context["conversation_history"] = previous_history[-10:]
+                    long_term_memories = []
+                    if self._memory_engine is not None:
+                        try:
+                            structured_memories = self._memory_engine.retrieve(
+                                user_input,
+                                context,
+                            )
+                            long_term_memories = [
+                                self._memory_record_to_context(memory)
+                                for memory in structured_memories
+                            ]
+                        except Exception:
+                            long_term_memories = []
+                    if not long_term_memories and self._long_term_memory is not None:
+                        long_term_memories = self._long_term_memory.search(user_input, max_results=5)
+                    if long_term_memories:
+                        context["long_term_memories"] = long_term_memories
+                    plan = self._planner.create_plan(
+                        user_input,
+                        context=context,
+                    )
+                else:
+                    plan = self._planner.create_plan(user_input)
         except Exception as exc:
             if self._recovery_engine is None:
                 raise
@@ -606,7 +645,9 @@ class AssistantAgent:
                 capability_name=last_capability,
             )
 
-        answer = plan["content"]
+        return self._build_answer_response(plan["content"])
+
+    def _build_answer_response(self, answer: str) -> dict:
         self._memory.add_assistant_message(answer)
         suggestions = build_suggestions("answer", answer)
         self._memory.set_suggestions(suggestions)

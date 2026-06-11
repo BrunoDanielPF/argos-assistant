@@ -789,6 +789,222 @@ def test_agent_does_not_treat_new_explicit_action_as_pending_file_path():
     assert executed == ["open_application"]
 
 
+def test_agent_answers_help_without_calling_planner_or_executor():
+    class FailIfCalledPlanner:
+        def create_plan(self, user_input: str, context: dict | None = None) -> dict:
+            raise AssertionError("planner should not run for help")
+
+    class FailIfCalledExecutor:
+        def execute(self, capability_name: str, args: dict):
+            raise AssertionError("executor should not run for help")
+
+    agent = AssistantAgent(
+        planner=FailIfCalledPlanner(),
+        executor=FailIfCalledExecutor(),
+    )
+
+    response = agent.handle("amigo, oque voce pode fazer?")
+
+    assert response["ok"] is True
+    assert "responder perguntas" in response["message"].lower()
+    assert "/cancel" in response["message"]
+
+
+def test_agent_help_clears_pending_path_without_calling_planner_or_executor():
+    class FailIfCalledPlanner:
+        def create_plan(self, user_input: str, context: dict | None = None) -> dict:
+            raise AssertionError("planner should not run for help")
+
+    class FailIfCalledExecutor:
+        def execute(self, capability_name: str, args: dict):
+            raise AssertionError("executor should not run for help")
+
+    memory = SessionMemory()
+    memory.set_pending_clarification(
+        {
+            "field": "path",
+            "question": "Qual arquivo?",
+            "action": {
+                "capability": "write_file",
+                "arguments": {"content": "hello", "write_mode": "replace"},
+            },
+            "options": [],
+            "accept_free_text": True,
+        }
+    )
+    agent = AssistantAgent(
+        planner=FailIfCalledPlanner(),
+        executor=FailIfCalledExecutor(),
+        memory=memory,
+    )
+
+    response = agent.handle("oque voce pode fazer?")
+
+    assert response["ok"] is True
+    assert "responder perguntas" in response["message"].lower()
+    assert agent.memory.snapshot()["context"]["pending_clarification"] is None
+
+
+def test_agent_resolves_pending_path_filename_without_calling_planner(tmp_path):
+    class FailIfCalledPlanner:
+        def create_plan(self, user_input: str, context: dict | None = None) -> dict:
+            raise AssertionError("planner should not run for resolved pending path")
+
+    executed = []
+
+    class RecordingExecutor:
+        def execute(self, capability_name: str, args: dict):
+            executed.append((capability_name, args))
+            return type("Result", (), {"ok": True, "message": "Updated", "data": None})()
+
+    memory = SessionMemory()
+    target = tmp_path / "teste.txt"
+    target.write_text("old", encoding="utf-8")
+    memory.set_context(
+        current_cwd=str(tmp_path),
+        default_search_root=str(tmp_path),
+        user_home=str(tmp_path),
+    )
+    memory.set_pending_clarification(
+        {
+            "field": "path",
+            "question": "Qual arquivo?",
+            "action": {
+                "capability": "write_file",
+                "arguments": {"content": "hello", "write_mode": "replace"},
+            },
+            "options": [],
+            "accept_free_text": True,
+        }
+    )
+    agent = AssistantAgent(
+        planner=FailIfCalledPlanner(),
+        executor=RecordingExecutor(),
+        memory=memory,
+        confirmer=lambda capability, arguments: True,
+    )
+
+    response = agent.handle("teste.txt")
+
+    assert response["ok"] is True
+    assert executed == [
+        (
+            "write_file",
+            {
+                "content": "hello",
+                "write_mode": "replace",
+                "path": str(target.resolve()),
+            },
+        )
+    ]
+    assert agent.memory.snapshot()["context"]["pending_clarification"] is None
+
+
+def test_agent_does_not_turn_conversational_statement_into_pending_path():
+    calls = []
+
+    class AnswerPlanner:
+        def create_plan(self, user_input: str, context: dict | None = None) -> dict:
+            calls.append(context)
+            return {
+                "mode": "answer",
+                "content": "Entendido. LangChain não será usado no core do Argos.",
+            }
+
+    class FailIfCalledExecutor:
+        def execute(self, capability_name: str, args: dict):
+            raise AssertionError("executor should not run for a new informational intent")
+
+    memory = SessionMemory()
+    memory.set_pending_clarification(
+        {
+            "field": "path",
+            "question": "Qual arquivo?",
+            "action": {
+                "capability": "write_file",
+                "arguments": {"content": "hello", "write_mode": "replace"},
+            },
+            "options": [],
+            "accept_free_text": True,
+        }
+    )
+    agent = AssistantAgent(
+        planner=AnswerPlanner(),
+        executor=FailIfCalledExecutor(),
+        memory=memory,
+    )
+
+    response = agent.handle("não quero usar LangChain no core do Argos")
+
+    assert response["ok"] is True
+    assert "langchain" in response["message"].lower()
+    assert calls[0]["pending_clarification"] is None
+    assert agent.memory.snapshot()["context"]["pending_clarification"] is None
+
+
+def test_agent_reclassifies_file_creation_instead_of_using_it_as_pending_path(
+    tmp_path,
+):
+    memory = SessionMemory()
+    memory.set_context(current_cwd=str(tmp_path))
+    memory.set_pending_clarification(
+        {
+            "field": "path",
+            "question": "Qual arquivo?",
+            "action": {
+                "capability": "write_file",
+                "arguments": {"content": "hello", "write_mode": "replace"},
+            },
+            "options": [],
+            "accept_free_text": True,
+        }
+    )
+    agent = AssistantAgent(
+        planner=Planner(llm_client=FailIfCalledClientForAgent()),
+        executor=ActionExecutor(),
+        memory=memory,
+    )
+
+    response = agent.handle("crie um arquivo chamado teste.txt")
+
+    assert response["status"] == "waiting_confirmation"
+    assert response["confirmation"]["capability"] == "create_file"
+    assert response["confirmation"]["arguments"]["path"] == str(
+        tmp_path / "teste.txt"
+    )
+    assert agent.memory.snapshot()["context"]["pending_clarification"] is None
+
+
+def test_agent_cancel_command_clears_pending_without_calling_planner():
+    class FailIfCalledPlanner:
+        def create_plan(self, user_input: str, context: dict | None = None) -> dict:
+            raise AssertionError("planner should not run for cancel")
+
+    memory = SessionMemory()
+    memory.set_pending_clarification(
+        {
+            "field": "path",
+            "question": "Qual arquivo?",
+            "action": {
+                "capability": "write_file",
+                "arguments": {"content": "hello", "write_mode": "replace"},
+            },
+            "options": [],
+            "accept_free_text": True,
+        }
+    )
+    agent = AssistantAgent(
+        planner=FailIfCalledPlanner(),
+        executor=FakeExecutor(),
+        memory=memory,
+    )
+
+    response = agent.handle("/cancel")
+
+    assert response["message"] == "Operação cancelada."
+    assert agent.memory.snapshot()["context"]["pending_clarification"] is None
+
+
 def test_agent_turns_planner_exception_into_recovery_diagnostic():
     class FailedPlanner:
         def create_plan(self, user_input: str) -> dict:
