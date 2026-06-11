@@ -1,4 +1,5 @@
 import builtins
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -6,9 +7,29 @@ import sys
 
 import typer
 from rich.console import Console
+import yaml
 
 from assistant.agent import AssistantAgent
 from assistant.config import AppConfig
+from assistant.workflows.engine import (
+    AmbiguousWorkflowId,
+    WorkflowEngine,
+    WorkflowNotRunnable,
+    WorkflowValidationFailed,
+)
+from assistant.workflows.handlers import build_local_workflow_handlers
+from assistant.workflows.models import (
+    InvalidWorkflowTransition,
+    WorkflowRunStatus,
+    WorkflowStatus,
+)
+from assistant.workflows.planner import (
+    AdaptativeDynamicWorkflowPlanner,
+    UnsupportedWorkflowDescription,
+)
+from assistant.workflows.repository import WorkflowRepository
+from assistant.workflows.runner import SequentialWorkflowRunner
+from assistant.workflows.validator import WorkflowValidator
 from assistant.gateway.client import GatewayClient, GatewayError, GatewayUnavailable
 from assistant.gateway.process import GatewayProcessManager
 from assistant.jobs.models import InvalidJobTransition, JobStatus
@@ -30,8 +51,10 @@ CLI_DESCRIPTION = f"{ASSISTANT_NAME} Local AI Assistant"
 app = typer.Typer(help=CLI_DESCRIPTION)
 tools_app = typer.Typer(help="Gerenciar tools do Argos")
 jobs_app = typer.Typer(help="Consultar jobs do Argos")
+workflows_app = typer.Typer(help="Gerenciar workflows adaptativos do Argos")
 app.add_typer(tools_app, name="tools")
 app.add_typer(jobs_app, name="jobs")
+app.add_typer(workflows_app, name="workflows")
 console = Console()
 
 
@@ -239,6 +262,47 @@ def build_job_repository() -> JobRepository:
     return JobRepository(AppConfig.load().database_file)
 
 
+def build_workflow_engine(confirmer=None) -> tuple[WorkflowEngine, WorkflowRepository]:
+    config = AppConfig.load()
+    repository = WorkflowRepository(config.database_file)
+    runner = SequentialWorkflowRunner(
+        repository=repository,
+        handlers=build_local_workflow_handlers(),
+        confirmer=confirmer,
+    )
+    return (
+        WorkflowEngine(
+            repository=repository,
+            planner=AdaptativeDynamicWorkflowPlanner(),
+            validator=WorkflowValidator(),
+            runner=runner,
+        ),
+        repository,
+    )
+
+
+@contextmanager
+def workflow_engine_context(confirmer=None):
+    engine, repository = build_workflow_engine(confirmer=confirmer)
+    try:
+        yield engine
+    finally:
+        repository.close()
+
+
+def confirm_workflow_step(handler_name: str, arguments: dict) -> bool:
+    console.print(f"Confirmacao necessaria para {handler_name}:")
+    console.print(
+        json.dumps(arguments, indent=2, ensure_ascii=False),
+        markup=False,
+    )
+    try:
+        answer = builtins.input("Executar este step? [s/N]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    return answer in {"y", "yes", "s", "sim"}
+
+
 def build_gateway_agent(session_id: str) -> GatewayAgentAdapter:
     return GatewayAgentAdapter(build_gateway_client(), session_id)
 
@@ -392,6 +456,211 @@ def tools_generate(definition: str) -> None:
     console.print(
         f"[OK] Draft criado em {draft.path} com estado {draft.state}. "
         "Ele nao esta instalado nem habilitado."
+    )
+
+
+def _render_workflow_error(exc: Exception) -> None:
+    if isinstance(exc, KeyError):
+        workflow_id = exc.args[0] if exc.args else "desconhecido"
+        console.print(f"Workflow nao encontrado: {workflow_id}")
+    elif isinstance(exc, AmbiguousWorkflowId):
+        console.print(f"Prefixo de workflow ambiguo: {exc}")
+    elif isinstance(exc, WorkflowValidationFailed):
+        for finding in exc.report.findings:
+            console.print(f"[ERROR] {finding.code}: {finding.message}")
+    else:
+        console.print(f"[ERROR] {exc}")
+    raise typer.Exit(code=1)
+
+
+@workflows_app.command("list")
+def workflows_list(
+    status: WorkflowStatus | None = typer.Option(None, "--status"),
+) -> None:
+    with workflow_engine_context() as engine:
+        workflows = engine.list(status=status)
+    if not workflows:
+        console.print("Nenhum workflow encontrado.")
+        return
+    for workflow in workflows:
+        console.print(
+            f"{workflow.id[:8]}  {workflow.status.value}  {workflow.name}",
+            markup=False,
+        )
+
+
+@workflows_app.command("generate")
+def workflows_generate(description: str) -> None:
+    try:
+        with workflow_engine_context() as engine:
+            workflow = engine.generate(description)
+    except UnsupportedWorkflowDescription as exc:
+        _render_workflow_error(exc)
+    console.print(
+        f"[OK] Workflow {workflow.id[:8]} criado como "
+        f"{workflow.status.value}.",
+        markup=False,
+    )
+
+
+@workflows_app.command("inspect")
+def workflows_inspect(workflow_id: str) -> None:
+    try:
+        with workflow_engine_context() as engine:
+            workflow = engine.get(workflow_id)
+    except (KeyError, AmbiguousWorkflowId) as exc:
+        _render_workflow_error(exc)
+    console.print(
+        json.dumps(
+            workflow.model_dump(mode="json"),
+            indent=2,
+            ensure_ascii=False,
+        ),
+        markup=False,
+    )
+
+
+@workflows_app.command("validate")
+def workflows_validate(workflow_id: str) -> None:
+    try:
+        with workflow_engine_context() as engine:
+            workflow = engine.validate(workflow_id)
+    except (
+        KeyError,
+        AmbiguousWorkflowId,
+        InvalidWorkflowTransition,
+        WorkflowValidationFailed,
+    ) as exc:
+        _render_workflow_error(exc)
+    console.print(
+        f"[OK] Workflow {workflow.id[:8]} status={workflow.status.value}"
+    )
+
+
+def _transition_workflow(
+    workflow_id: str,
+    action: str,
+) -> None:
+    try:
+        with workflow_engine_context() as engine:
+            workflow = getattr(engine, action)(workflow_id)
+    except (
+        KeyError,
+        AmbiguousWorkflowId,
+        InvalidWorkflowTransition,
+    ) as exc:
+        _render_workflow_error(exc)
+    console.print(
+        f"[OK] Workflow {workflow.id[:8]} status={workflow.status.value}"
+    )
+
+
+@workflows_app.command("approve")
+def workflows_approve(workflow_id: str) -> None:
+    _transition_workflow(workflow_id, "approve")
+
+
+@workflows_app.command("reject")
+def workflows_reject(workflow_id: str) -> None:
+    _transition_workflow(workflow_id, "reject")
+
+
+@workflows_app.command("enable")
+def workflows_enable(workflow_id: str) -> None:
+    _transition_workflow(workflow_id, "enable")
+
+
+@workflows_app.command("disable")
+def workflows_disable(workflow_id: str) -> None:
+    _transition_workflow(workflow_id, "disable")
+
+
+@workflows_app.command("run")
+def workflows_run(workflow_id: str) -> None:
+    confirmer = (
+        confirm_workflow_step
+        if sys.stdin is not None and sys.stdin.isatty()
+        else None
+    )
+    try:
+        with workflow_engine_context(confirmer=confirmer) as engine:
+            run = engine.run(
+                workflow_id,
+                trigger_event={"source": "manual_cli"},
+            )
+    except (
+        KeyError,
+        AmbiguousWorkflowId,
+        WorkflowNotRunnable,
+    ) as exc:
+        _render_workflow_error(exc)
+    console.print(
+        f"[OK] WorkflowRun {run.id[:8]} status={run.status.value}"
+    )
+    if run.status in {
+        WorkflowRunStatus.FAILED,
+        WorkflowRunStatus.CANCELLED,
+        WorkflowRunStatus.BLOCKED,
+    }:
+        raise typer.Exit(code=1)
+
+
+@workflows_app.command("logs")
+def workflows_logs(workflow_id: str) -> None:
+    try:
+        with workflow_engine_context() as engine:
+            runs = engine.list_runs(workflow_id)
+            run_steps = {
+                run.id: engine.list_run_steps(run.id)
+                for run in runs
+            }
+    except (KeyError, AmbiguousWorkflowId) as exc:
+        _render_workflow_error(exc)
+    if not runs:
+        console.print("Nenhuma execucao encontrada.")
+        return
+    for run in runs:
+        console.print(
+            f"run={run.id} status={run.status.value} "
+            f"started={run.started_at.isoformat()} "
+            f"finished={run.finished_at.isoformat() if run.finished_at else '-'}"
+        )
+        if run.error:
+            console.print(f"error={run.error}")
+        for step in run_steps[run.id]:
+            console.print(
+                f"  step={step.step_id} status={step.status.value} "
+                f"error={step.error or '-'}"
+            )
+            if step.output_json is not None:
+                console.print(
+                    "  output="
+                    + json.dumps(step.output_json, ensure_ascii=False),
+                    markup=False,
+                )
+
+
+@workflows_app.command("delete")
+def workflows_delete(workflow_id: str) -> None:
+    _transition_workflow(workflow_id, "archive")
+
+
+@workflows_app.command("export")
+def workflows_export(workflow_id: str) -> None:
+    try:
+        with workflow_engine_context() as engine:
+            workflow = engine.get(workflow_id)
+    except (KeyError, AmbiguousWorkflowId) as exc:
+        _render_workflow_error(exc)
+    payload = workflow.model_dump(mode="json")
+    console.print(
+        yaml.safe_dump(
+            payload,
+            allow_unicode=True,
+            sort_keys=False,
+        ),
+        markup=False,
+        end="",
     )
 
 

@@ -121,11 +121,18 @@ def test_run_and_run_step_generate_ids_and_pending_statuses():
 
 def test_workflows_package_exports_runtime_contracts():
     from assistant.workflows import (
+        AdaptativeDynamicWorkflowPlanner,
         SequentialWorkflowRunner,
+        WorkflowEngine,
         WorkflowPolicyEvaluator,
         WorkflowValidator,
     )
 
+    assert (
+        AdaptativeDynamicWorkflowPlanner.__name__
+        == "AdaptativeDynamicWorkflowPlanner"
+    )
     assert SequentialWorkflowRunner.__name__ == "SequentialWorkflowRunner"
+    assert WorkflowEngine.__name__ == "WorkflowEngine"
     assert WorkflowPolicyEvaluator.__name__ == "WorkflowPolicyEvaluator"
     assert WorkflowValidator.__name__ == "WorkflowValidator"

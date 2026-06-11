@@ -1,3 +1,4 @@
+from assistant.workflows.engine import WorkflowEngine
 from assistant.workflows.models import (
     PolicyDecision,
     Workflow,
@@ -14,6 +15,7 @@ from assistant.workflows.models import (
     WorkflowTrigger,
     WorkflowTriggerType,
 )
+from assistant.workflows.planner import AdaptativeDynamicWorkflowPlanner
 from assistant.workflows.policies import WorkflowPolicyEvaluator
 from assistant.workflows.repository import WorkflowRepository
 from assistant.workflows.runner import SequentialWorkflowRunner
@@ -24,10 +26,12 @@ from assistant.workflows.validator import (
 )
 
 __all__ = [
+    "AdaptativeDynamicWorkflowPlanner",
     "PolicyDecision",
     "SequentialWorkflowRunner",
     "Workflow",
     "WorkflowBudget",
+    "WorkflowEngine",
     "WorkflowHandlerResult",
     "WorkflowPolicy",
     "WorkflowPolicyEvaluator",
