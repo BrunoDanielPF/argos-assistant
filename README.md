@@ -369,6 +369,7 @@ Detalhes técnicos, arquitetura, módulos, fluxos internos, políticas, decisõe
 
 ```text
 docs/ARCHITECTURE.md
+docs/WORKFLOWS.md
 ```
 
 Essa separação é intencional:
@@ -377,6 +378,7 @@ Essa separação é intencional:
 |---|---|---|
 | `README.md` | Usuários, avaliadores e visão de produto | Executiva, clara e orientada à experiência |
 | `docs/ARCHITECTURE.md` | Desenvolvimento e evolução técnica | Técnica, modular e orientada à implementação |
+| `docs/WORKFLOWS.md` | Usuários avançados e desenvolvimento | Operacional, declarativa e orientada à segurança do ADW |
 
 ---
 
