@@ -118,9 +118,23 @@ def test_validator_rejects_enabled_natural_language_workflow():
     assert "generated_workflow_must_be_draft" in finding_codes(payload)
 
 
+def test_validator_allows_generated_workflow_after_validation_transition():
+    payload = valid_payload()
+    payload["status"] = "validated"
+
+    assert "generated_workflow_must_be_draft" not in finding_codes(payload)
+
+
 def test_validator_requires_confirmation_for_files_move():
     payload = valid_payload()
     payload["steps"][1]["requires_confirmation"] = False
+    payload["policy"]["actions"]["files.move"] = "allow"
+
+    assert "files_move_requires_confirmation" in finding_codes(payload)
+
+
+def test_validator_requires_explicit_confirm_policy_for_files_move():
+    payload = valid_payload()
     payload["policy"]["actions"]["files.move"] = "allow"
 
     assert "files_move_requires_confirmation" in finding_codes(payload)

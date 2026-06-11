@@ -152,12 +152,16 @@ class WorkflowValidator:
                         "steps",
                     )
                 )
-            findings.extend(self._step_findings(steps))
+            findings.extend(
+                self._step_findings(
+                    steps,
+                    payload.get("policy"),
+                )
+            )
 
         if (
             payload.get("source_prompt")
-            and payload.get("status", WorkflowStatus.DRAFT.value)
-            != WorkflowStatus.DRAFT.value
+            and payload.get("status") == WorkflowStatus.ENABLED.value
         ):
             findings.append(
                 WorkflowValidationFinding(
@@ -194,9 +198,15 @@ class WorkflowValidator:
     @staticmethod
     def _step_findings(
         steps: list,
+        policy: object,
     ) -> list[WorkflowValidationFinding]:
         findings = []
         seen_ids: set[str] = set()
+        policy_actions = (
+            policy.get("actions", {})
+            if isinstance(policy, dict)
+            else {}
+        )
         for index, step in enumerate(steps):
             path = f"steps.{index}"
             if not isinstance(step, dict):
@@ -232,12 +242,23 @@ class WorkflowValidator:
                 requires_confirmation = bool(
                     step.get("requires_confirmation", False)
                 )
-                if not requires_confirmation:
+                policy_confirms = (
+                    isinstance(policy_actions, dict)
+                    and policy_actions.get("files.move") == "confirm"
+                )
+                if not requires_confirmation or not policy_confirms:
                     findings.append(
                         WorkflowValidationFinding(
                             "files_move_requires_confirmation",
-                            "files.move must require confirmation.",
-                            f"{path}.requires_confirmation",
+                            (
+                                "files.move must require confirmation in both "
+                                "the step and workflow policy."
+                            ),
+                            (
+                                f"{path}.requires_confirmation"
+                                if not requires_confirmation
+                                else "policy.actions.files.move"
+                            ),
                         )
                     )
             if handler == "shell.run":
