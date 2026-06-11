@@ -173,4 +173,3 @@ def ensure_valid_workflow_transition(
         raise InvalidWorkflowTransition(
             f"Invalid workflow transition from {current.value} to {target.value}"
         )
-

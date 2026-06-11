@@ -117,4 +117,3 @@ def test_run_and_run_step_generate_ids_and_pending_statuses():
     assert run_step.status == WorkflowRunStepStatus.PENDING
     assert run_step.started_at.tzinfo == timezone.utc
     assert run_step.output_json is None
-

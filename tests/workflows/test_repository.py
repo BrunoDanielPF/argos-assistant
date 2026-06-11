@@ -207,4 +207,3 @@ def test_repository_persists_and_updates_workflow_run_step(tmp_path):
     assert repository.get_run_step(run_step.id) == succeeded
     assert repository.list_run_steps(run.id) == [succeeded]
     repository.close()
-
