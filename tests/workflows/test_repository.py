@@ -207,3 +207,24 @@ def test_repository_persists_and_updates_workflow_run_step(tmp_path):
     assert repository.get_run_step(run_step.id) == succeeded
     assert repository.list_run_steps(run.id) == [succeeded]
     repository.close()
+
+
+def test_repository_preserves_run_step_output_when_status_changes(tmp_path):
+    repository = WorkflowRepository(tmp_path / "argos.db")
+    workflow = repository.create_workflow(build_workflow())
+    run = repository.create_run(WorkflowRun(workflow_id=workflow.id))
+    run_step = repository.create_run_step(
+        WorkflowRunStep(
+            run_id=run.id,
+            step_id="inspect",
+            output_json={"existing": True},
+        )
+    )
+
+    updated = repository.update_run_step_status(
+        run_step.id,
+        WorkflowRunStepStatus.RUNNING,
+    )
+
+    assert updated.output_json == {"existing": True}
+    repository.close()

@@ -117,3 +117,15 @@ def test_run_and_run_step_generate_ids_and_pending_statuses():
     assert run_step.status == WorkflowRunStepStatus.PENDING
     assert run_step.started_at.tzinfo == timezone.utc
     assert run_step.output_json is None
+
+
+def test_workflows_package_exports_runtime_contracts():
+    from assistant.workflows import (
+        SequentialWorkflowRunner,
+        WorkflowPolicyEvaluator,
+        WorkflowValidator,
+    )
+
+    assert SequentialWorkflowRunner.__name__ == "SequentialWorkflowRunner"
+    assert WorkflowPolicyEvaluator.__name__ == "WorkflowPolicyEvaluator"
+    assert WorkflowValidator.__name__ == "WorkflowValidator"

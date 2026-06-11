@@ -316,7 +316,10 @@ class WorkflowRepository:
             cursor = self._connection.execute(
                 """
                 UPDATE workflow_run_steps
-                SET status = ?, output_json = ?, error = ?, finished_at = ?
+                SET status = ?,
+                    output_json = COALESCE(?, output_json),
+                    error = ?,
+                    finished_at = ?
                 WHERE id = ?
                 """,
                 (

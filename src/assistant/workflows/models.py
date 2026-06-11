@@ -93,6 +93,12 @@ class WorkflowBudget(StrictModel):
     max_parallel_tasks: int = Field(ge=1)
 
 
+class WorkflowHandlerResult(StrictModel):
+    ok: bool = True
+    output: dict = Field(default_factory=dict)
+    error: str | None = None
+
+
 class Workflow(StrictModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     name: str = Field(min_length=1, max_length=200)
