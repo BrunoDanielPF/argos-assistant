@@ -109,6 +109,14 @@ class AppConfig(BaseModel):
             )
         )
     )
+    recovery_audit_file: Path = Field(
+        default_factory=lambda: Path(
+            os.environ.get(
+                "ARGOS_RECOVERY_AUDIT_FILE",
+                Path.home() / ".argos" / "audit" / "recovery.jsonl",
+            )
+        )
+    )
 
     @classmethod
     def load(cls, path: Path | None = None) -> "AppConfig":
@@ -147,6 +155,7 @@ class AppConfig(BaseModel):
             "ARGOS_TOOL_ENVS_DIR": "tool_envs_dir",
             "ARGOS_TOOL_STATE_FILE": "tool_state_file",
             "ARGOS_TOOL_AUDIT_FILE": "tool_audit_file",
+            "ARGOS_RECOVERY_AUDIT_FILE": "recovery_audit_file",
         }
         for env_name, field_name in env_fields.items():
             if env_name in os.environ:

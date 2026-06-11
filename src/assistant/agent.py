@@ -7,6 +7,7 @@ from assistant.files.resolver import FileResolver
 from assistant.memory.models import MemoryRecord
 from assistant.memory.session import SessionMemory
 from assistant.models import AuditEvent
+from assistant.recovery.models import RecoveryStrategy
 from assistant.suggestions import build_suggestions
 
 
@@ -22,6 +23,7 @@ class AssistantAgent:
         action_validator: Callable[[str, dict], str | None] | None = None,
         confirmer: Callable[[str, dict], bool] | None = None,
         file_resolver: FileResolver | None = None,
+        recovery_engine=None,
     ) -> None:
         self._planner = planner
         self._executor = executor
@@ -32,6 +34,7 @@ class AssistantAgent:
         self._action_validator = action_validator or (lambda capability, arguments: None)
         self._confirmer = confirmer
         self._file_resolver = file_resolver or FileResolver()
+        self._recovery_engine = recovery_engine
 
     @property
     def memory(self) -> SessionMemory:
@@ -88,21 +91,45 @@ class AssistantAgent:
         )
         suggestions = build_suggestions("answer", message)
         self._memory.set_suggestions(suggestions)
+        confirmation = {
+            "capability": capability_name,
+            "arguments": dict(arguments),
+        }
+        if self._recovery_engine is not None:
+            confirmation["dry_run"] = self._recovery_engine.preview_action(
+                capability_name,
+                arguments,
+            ).model_dump(mode="json")
         return {
             "ok": False,
             "status": "waiting_confirmation",
             "message": message,
             "suggestions": [item.model_dump() for item in suggestions],
-            "confirmation": {
-                "capability": capability_name,
-                "arguments": dict(arguments),
-            },
+            "confirmation": confirmation,
         }
 
     def _execute_action(self, capability_name: str, arguments: dict):
         policy = self._policy_decider(capability_name)
 
         if policy == "blocked":
+            if self._recovery_engine is not None:
+                outcome = self._recovery_engine.handle_failure(
+                    source="action",
+                    operation=capability_name,
+                    message=f"Blocked capability: {capability_name}",
+                    arguments=arguments,
+                    error_code="policy_blocked",
+                )
+                return type(
+                    "Result",
+                    (),
+                    {
+                        "ok": False,
+                        "message": outcome.plan.user_message,
+                        "data": None,
+                        "error_code": "policy_blocked",
+                    },
+                )()
             return type(
                 "Result",
                 (),
@@ -133,7 +160,75 @@ class AssistantAgent:
                     {"ok": False, "message": "Action cancelled by user", "data": None},
                 )()
 
-        return self._executor.execute(capability_name, arguments)
+        return self._execute_with_recovery(capability_name, arguments)
+
+    def _execute_with_recovery(
+        self,
+        capability_name: str,
+        arguments: dict,
+    ):
+        result = self._executor.execute(capability_name, arguments)
+        if result.ok or self._recovery_engine is None:
+            return result
+
+        error_code = getattr(result, "error_code", None)
+        source = "tool" if "." in capability_name else "action"
+        outcome = self._recovery_engine.handle_failure(
+            source=source,
+            operation=capability_name,
+            message=result.message,
+            arguments=arguments,
+            error_code=error_code,
+            metadata={
+                "retry_safe": bool(getattr(result, "retry_safe", False))
+            },
+        )
+        if outcome.plan.strategy == RecoveryStrategy.RETRY_WITH_BACKOFF:
+            retried = self._executor.execute(capability_name, arguments)
+            self._recovery_engine.record_attempt(
+                outcome,
+                attempt=1,
+                succeeded=bool(retried.ok),
+                message=retried.message,
+            )
+            if retried.ok:
+                return retried
+            final_outcome = self._recovery_engine.handle_failure(
+                source=source,
+                operation=capability_name,
+                message=retried.message,
+                arguments=arguments,
+                error_code=getattr(retried, "error_code", None),
+                metadata={
+                    "retry_safe": bool(
+                        getattr(retried, "retry_safe", False)
+                    )
+                },
+                attempt=1,
+            )
+            return type(
+                "Result",
+                (),
+                {
+                    "ok": False,
+                    "message": (
+                        f"{retried.message}\n"
+                        f"{final_outcome.plan.user_message}"
+                    ),
+                    "data": getattr(retried, "data", None),
+                    "error_code": getattr(retried, "error_code", None),
+                },
+            )()
+        return type(
+            "Result",
+            (),
+            {
+                "ok": False,
+                "message": f"{result.message}\n{outcome.plan.user_message}",
+                "data": getattr(result, "data", None),
+                "error_code": error_code,
+            },
+        )()
 
     def execute_confirmed_action(
         self,
@@ -150,7 +245,7 @@ class AssistantAgent:
                 decision="rejected",
                 reason="user_rejected",
             )
-        result = self._executor.execute(capability_name, arguments)
+        result = self._execute_with_recovery(capability_name, arguments)
         return self._build_response(
             ok=result.ok,
             message=self._recover_failure_message(
@@ -205,6 +300,15 @@ class AssistantAgent:
             return resolved_arguments, None
 
         if resolution.status == "ambiguous":
+            if self._recovery_engine is not None:
+                self._recovery_engine.handle_failure(
+                    source="context",
+                    operation=capability_name,
+                    message=f"Ambiguous file context: {path}",
+                    arguments=arguments,
+                    error_code="context_ambiguity",
+                    metadata={"match_count": len(resolution.matches)},
+                )
             options = [
                 {"id": match, "label": match}
                 for match in resolution.matches
@@ -309,6 +413,25 @@ class AssistantAgent:
         )
         return any(marker in normalized for marker in reset_markers)
 
+    @staticmethod
+    def _is_explicit_new_action_request(user_input: str) -> bool:
+        normalized = user_input.strip().lower()
+        action_markers = (
+            "abra ",
+            "abrir ",
+            "open ",
+            "crie ",
+            "criar ",
+            "apague ",
+            "delete ",
+            "execute ",
+            "altere o path",
+            "alterar o path",
+            "adicione ao path",
+            "configure ",
+        )
+        return any(normalized.startswith(marker) for marker in action_markers)
+
     def handle(self, user_input: str) -> dict:
         result = self._handle(user_input)
         if self._memory_engine is not None:
@@ -328,38 +451,58 @@ class AssistantAgent:
         previous_history = snapshot.get("history", [])
         snapshot_context = dict(snapshot.get("context") or {})
         subject_was_reset = self._is_subject_reset_request(user_input)
-        if subject_was_reset:
+        explicit_new_action = (
+            snapshot_context.get("pending_clarification") is not None
+            and self._is_explicit_new_action_request(user_input)
+        )
+        if subject_was_reset or explicit_new_action:
             self._memory.clear_pending_clarification()
             snapshot_context["pending_clarification"] = None
             previous_history = []
         self._memory.add_user_message(user_input)
-        planner_params = inspect.signature(self._planner.create_plan).parameters
-        if "context" in planner_params:
-            context = dict(snapshot_context)
-            context["conversation_history"] = previous_history[-10:]
-            long_term_memories = []
-            if self._memory_engine is not None:
-                try:
-                    structured_memories = self._memory_engine.retrieve(
-                        user_input,
-                        context,
-                    )
-                    long_term_memories = [
-                        self._memory_record_to_context(memory)
-                        for memory in structured_memories
-                    ]
-                except Exception:
-                    long_term_memories = []
-            if not long_term_memories and self._long_term_memory is not None:
-                long_term_memories = self._long_term_memory.search(user_input, max_results=5)
-            if long_term_memories:
-                context["long_term_memories"] = long_term_memories
-            plan = self._planner.create_plan(
-                user_input,
-                context=context,
+        try:
+            planner_params = inspect.signature(self._planner.create_plan).parameters
+            if "context" in planner_params:
+                context = dict(snapshot_context)
+                context["conversation_history"] = previous_history[-10:]
+                long_term_memories = []
+                if self._memory_engine is not None:
+                    try:
+                        structured_memories = self._memory_engine.retrieve(
+                            user_input,
+                            context,
+                        )
+                        long_term_memories = [
+                            self._memory_record_to_context(memory)
+                            for memory in structured_memories
+                        ]
+                    except Exception:
+                        long_term_memories = []
+                if not long_term_memories and self._long_term_memory is not None:
+                    long_term_memories = self._long_term_memory.search(user_input, max_results=5)
+                if long_term_memories:
+                    context["long_term_memories"] = long_term_memories
+                plan = self._planner.create_plan(
+                    user_input,
+                    context=context,
+                )
+            else:
+                plan = self._planner.create_plan(user_input)
+        except Exception as exc:
+            if self._recovery_engine is None:
+                raise
+            outcome = self._recovery_engine.handle_failure(
+                source="planner",
+                operation="create_plan",
+                message=str(exc) or type(exc).__name__,
+                exception=exc,
             )
-        else:
-            plan = self._planner.create_plan(user_input)
+            return self._build_response(
+                ok=False,
+                message=outcome.plan.user_message,
+                capability_name="planner",
+                reason=outcome.event.failure_type.value,
+            )
 
         if plan["mode"] == "clarification":
             return self._build_clarification_response(

@@ -48,6 +48,7 @@ def test_factory_builds_agent_with_provided_memory(monkeypatch, tmp_path):
     agent = RuntimeFactory(config=config).build_agent(memory=memory)
 
     assert agent.memory is memory
+    assert agent._recovery_engine is not None
 
 
 def test_factory_injects_provided_memory_engine(monkeypatch, tmp_path):

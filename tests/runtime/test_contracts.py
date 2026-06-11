@@ -46,3 +46,24 @@ def test_response_can_require_confirmation():
     )
 
     assert response.confirmation.capability == "write_file"
+
+
+def test_confirmation_can_include_dry_run():
+    confirmation = ConfirmationRequest(
+        confirmation_id="confirm-1",
+        capability="create_file",
+        arguments_summary={"path": "C:\\notes.md"},
+        permissions=["write:C:\\notes.md"],
+        question="Autorizar?",
+        dry_run={
+            "action": "create_file",
+            "resources_affected": ["C:\\notes.md"],
+            "risk": "medium",
+            "permissions_required": ["write:C:\\notes.md"],
+            "requires_confirmation": True,
+            "expected_result": "Arquivo seria criado.",
+            "can_execute": True,
+        },
+    )
+
+    assert confirmation.dry_run["action"] == "create_file"

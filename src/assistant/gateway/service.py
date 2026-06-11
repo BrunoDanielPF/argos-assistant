@@ -177,6 +177,7 @@ class GatewayService:
             arguments_summary=self._summarize_arguments(arguments),
             permissions=self._describe_permissions(capability, arguments),
             question=f"Autorizar a execucao de {capability}?",
+            dry_run=payload.get("dry_run"),
         )
 
     @staticmethod

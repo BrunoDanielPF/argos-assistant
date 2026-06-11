@@ -6,6 +6,8 @@ CONFIRM = {
     "run_shell_command",
     "type_text",
     "write_file",
+    "modify_path",
+    "modify_environment_variable",
 }
 BLOCKED = {"delete_files", "shutdown_system"}
 

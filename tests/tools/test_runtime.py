@@ -104,6 +104,24 @@ def test_runner_times_out(tmp_path):
 
     assert result.ok is False
     assert result.error_code == "timeout"
+    assert result.retry_safe is True
+
+
+def test_runner_does_not_mark_write_capable_tool_retry_safe(tmp_path):
+    tool = write_runtime_tool(
+        tmp_path,
+        "import time\n\ndef run(arguments):\n    time.sleep(2)\n    return {'text': 'late'}\n",
+        timeout=1,
+    )
+    tool.manifest.permissions.filesystem.write.append("${text}")
+
+    result = ToolRunner(python_executable=sys.executable).run(
+        tool,
+        {"text": "ola"},
+    )
+
+    assert result.ok is False
+    assert result.retry_safe is False
 
 
 def test_runner_rejects_invalid_output_schema(tmp_path):

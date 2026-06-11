@@ -21,6 +21,7 @@ class ConfirmationRequest(StrictModel):
     arguments_summary: dict = Field(default_factory=dict)
     permissions: list[str] = Field(default_factory=list)
     question: str
+    dry_run: dict | None = None
 
 
 class ConfirmationDecision(StrictModel):

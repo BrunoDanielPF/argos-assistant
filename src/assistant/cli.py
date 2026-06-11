@@ -330,6 +330,16 @@ def resolve_gateway_confirmation(client: GatewayClient, response):
         console.print("Permissoes:")
         for permission in confirmation.permissions:
             console.print(f"- {permission}")
+    if confirmation.dry_run:
+        console.print("Dry-run:")
+        console.print(
+            json.dumps(
+                confirmation.dry_run,
+                indent=2,
+                ensure_ascii=False,
+            ),
+            markup=False,
+        )
     console.print(confirmation.question)
     try:
         answer = builtins.input("Executar esta acao? [s/N]: ").strip().lower()

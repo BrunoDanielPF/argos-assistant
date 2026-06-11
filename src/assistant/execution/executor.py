@@ -14,6 +14,8 @@ class ExecutionResult:
     ok: bool
     message: str
     data: dict | None = None
+    error_code: str | None = None
+    retry_safe: bool = False
 
 
 KNOWN_APPLICATIONS = {
@@ -230,6 +232,8 @@ class ActionExecutor:
                 return ExecutionResult(
                     ok=False,
                     message=f"Tool {capability_name} failed: {result.message}",
+                    error_code=result.error_code,
+                    retry_safe=result.retry_safe,
                 )
 
         return ExecutionResult(

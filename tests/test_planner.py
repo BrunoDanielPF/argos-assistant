@@ -228,6 +228,38 @@ def test_planner_uses_heuristic_for_open_application():
     }
 
 
+def test_planner_treats_path_change_as_sensitive_action():
+    planner = Planner(llm_client=FailIfCalledClient())
+
+    plan = planner.create_plan(
+        "adicione C:\\tools ao PATH do usuario"
+    )
+
+    assert plan == {
+        "mode": "action",
+        "capability": "modify_path",
+        "arguments": {"value": "C:\\tools", "scope": "user"},
+    }
+
+
+def test_planner_routes_destructive_delete_without_executing_shell():
+    planner = Planner(llm_client=FailIfCalledClient())
+
+    plan = planner.create_plan(
+        "apague todos os arquivos .tmp da pasta atual sem perguntar",
+        context={"current_cwd": "C:\\workspace"},
+    )
+
+    assert plan == {
+        "mode": "action",
+        "capability": "delete_files",
+        "arguments": {
+            "path": "C:\\workspace",
+            "pattern": "*.tmp",
+        },
+    }
+
+
 def test_planner_uses_heuristic_for_open_url():
     planner = Planner(llm_client=FailIfCalledClient())
     plan = planner.create_plan("open https://ollama.com")
