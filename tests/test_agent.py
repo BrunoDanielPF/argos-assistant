@@ -9,6 +9,7 @@ from assistant.memory.models import (
 )
 from assistant.memory.session import SessionMemory
 from assistant.planner import Planner
+from assistant.recovery.engine import RecoveryEngine
 
 
 class FakePlanner:
@@ -631,6 +632,216 @@ def test_agent_converts_write_without_mode_to_create_for_explicit_new_file(tmp_p
     assert response["ok"] is True
     assert target.read_text(encoding="utf-8") == "# Receita"
     assert confirmations[0][0] == "create_file"
+
+
+def test_agent_returns_dry_run_for_sensitive_confirmation(tmp_path):
+    target = tmp_path / "notes.md"
+
+    class CreatePlanner:
+        def create_plan(self, user_input: str) -> dict:
+            return {
+                "mode": "action",
+                "capability": "create_file",
+                "arguments": {"path": str(target), "content": "hello"},
+            }
+
+    agent = AssistantAgent(
+        planner=CreatePlanner(),
+        executor=ActionExecutor(),
+        recovery_engine=RecoveryEngine(),
+    )
+
+    response = agent.handle("crie o arquivo")
+
+    assert response["status"] == "waiting_confirmation"
+    assert response["confirmation"]["dry_run"]["action"] == "create_file"
+    assert response["confirmation"]["dry_run"]["resources_affected"] == [
+        str(target)
+    ]
+    assert not target.exists()
+
+
+def test_agent_explains_policy_block_without_executing():
+    class DeletePlanner:
+        def create_plan(self, user_input: str) -> dict:
+            return {
+                "mode": "action",
+                "capability": "delete_files",
+                "arguments": {"path": ".", "pattern": "*.tmp"},
+            }
+
+    class FailIfCalledExecutor:
+        def execute(self, capability_name: str, args: dict):
+            raise AssertionError("blocked action must not execute")
+
+    agent = AssistantAgent(
+        planner=DeletePlanner(),
+        executor=FailIfCalledExecutor(),
+        recovery_engine=RecoveryEngine(),
+    )
+
+    response = agent.handle(
+        "apague todos os arquivos .tmp da pasta atual sem perguntar"
+    )
+
+    assert response["ok"] is False
+    assert "bloqueada" in response["message"].lower()
+    assert "alternativa" in response["message"].lower()
+
+
+def test_agent_retries_tool_timeout_only_once():
+    attempts = []
+
+    class ToolPlanner:
+        def create_plan(self, user_input: str) -> dict:
+            return {
+                "mode": "action",
+                "capability": "local.echo",
+                "arguments": {"text": "hello"},
+            }
+
+    class TimeoutThenSuccessExecutor:
+        def execute(self, capability_name: str, args: dict):
+            attempts.append((capability_name, args))
+            if len(attempts) == 1:
+                return type(
+                    "Result",
+                    (),
+                    {
+                        "ok": False,
+                        "message": "tool timed out",
+                        "error_code": "timeout",
+                        "retry_safe": True,
+                        "data": None,
+                    },
+                )()
+            return type(
+                "Result",
+                (),
+                {
+                    "ok": True,
+                    "message": "Tool local.echo executed successfully",
+                    "error_code": None,
+                    "retry_safe": True,
+                    "data": {"text": "hello"},
+                },
+            )()
+
+    agent = AssistantAgent(
+        planner=ToolPlanner(),
+        executor=TimeoutThenSuccessExecutor(),
+        policy_decider=lambda capability: "allow",
+        recovery_engine=RecoveryEngine(),
+    )
+
+    response = agent.handle("execute echo")
+
+    assert response["ok"] is True
+    assert len(attempts) == 2
+
+
+def test_agent_does_not_treat_new_explicit_action_as_pending_file_path():
+    calls = []
+
+    class ContextPlanner:
+        def create_plan(self, user_input: str, context: dict | None = None) -> dict:
+            calls.append(context)
+            return {
+                "mode": "action",
+                "capability": "open_application",
+                "arguments": {"application": "calculator"},
+            }
+
+    memory = SessionMemory()
+    memory.set_pending_clarification(
+        {
+            "field": "path",
+            "question": "Qual arquivo?",
+            "action": {
+                "capability": "write_file",
+                "arguments": {"content": "hello", "write_mode": "replace"},
+            },
+            "options": [],
+            "accept_free_text": True,
+        }
+    )
+    executed = []
+
+    class RecordingExecutor:
+        def execute(self, capability_name: str, args: dict):
+            executed.append(capability_name)
+            return type(
+                "Result",
+                (),
+                {"ok": True, "message": "Opened", "data": None},
+            )()
+
+    agent = AssistantAgent(
+        planner=ContextPlanner(),
+        executor=RecordingExecutor(),
+        memory=memory,
+    )
+
+    response = agent.handle("abra a calculadora")
+
+    assert response["ok"] is True
+    assert calls[0]["pending_clarification"] is None
+    assert executed == ["open_application"]
+
+
+def test_agent_turns_planner_exception_into_recovery_diagnostic():
+    class FailedPlanner:
+        def create_plan(self, user_input: str) -> dict:
+            raise TimeoutError("model timed out")
+
+    agent = AssistantAgent(
+        planner=FailedPlanner(),
+        executor=FakeExecutor(),
+        recovery_engine=RecoveryEngine(),
+    )
+
+    response = agent.handle("execute a tarefa")
+
+    assert response["ok"] is False
+    assert "tempo limite" in response["message"].lower()
+
+
+def test_agent_registers_file_context_ambiguity(tmp_path):
+    (tmp_path / "notes.md").write_text("one", encoding="utf-8")
+    (tmp_path / "notes.txt").write_text("two", encoding="utf-8")
+    recorded = []
+
+    class RecordingRecovery:
+        def handle_failure(self, **kwargs):
+            recorded.append(kwargs)
+            return RecoveryEngine().handle_failure(**kwargs)
+
+    class WritePlanner:
+        def create_plan(self, user_input: str, context=None) -> dict:
+            return {
+                "mode": "action",
+                "capability": "write_file",
+                "arguments": {
+                    "path": "notes",
+                    "content": "new",
+                    "write_mode": "replace",
+                },
+            }
+
+    memory = SessionMemory()
+    memory.set_context(current_cwd=str(tmp_path), user_home=str(tmp_path))
+    agent = AssistantAgent(
+        planner=WritePlanner(),
+        executor=ActionExecutor(),
+        memory=memory,
+        recovery_engine=RecordingRecovery(),
+    )
+
+    response = agent.handle("edite notes")
+
+    assert response["ok"] is True
+    assert recorded[0]["error_code"] == "context_ambiguity"
+    assert not response.get("confirmation")
 
 
 class FailIfCalledClientForAgent:

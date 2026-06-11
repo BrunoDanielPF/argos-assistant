@@ -223,3 +223,38 @@ def test_executor_rejects_reminder_without_repository():
 
     assert result.ok is False
     assert "not configured" in result.message
+
+
+def test_executor_preserves_tool_error_code_for_recovery():
+    class Tool:
+        manifest = type(
+            "Manifest",
+            (),
+            {
+                "permissions": {},
+            },
+        )()
+
+    class Catalog:
+        def get_enabled(self, capability_name: str):
+            return Tool()
+
+    class Runner:
+        def run(self, tool, args):
+            return type(
+                "ToolResult",
+                (),
+                {
+                    "ok": False,
+                    "message": "tool timed out",
+                    "error_code": "timeout",
+                    "retry_safe": True,
+                },
+            )()
+
+    executor = ActionExecutor(tool_catalog=Catalog(), tool_runner=Runner())
+    result = executor.execute("local.echo", {"text": "hello"})
+
+    assert result.ok is False
+    assert result.error_code == "timeout"
+    assert result.retry_safe is True

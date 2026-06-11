@@ -30,6 +30,12 @@ def build_default_registry(tool_catalog=None) -> CapabilityRegistry:
             Capability(name="search_files", description="Search files in a directory"),
             Capability(name="schedule_reminder", description="Schedule a local reminder"),
             Capability(name="run_shell_command", description="Run a shell command"),
+            Capability(name="modify_path", description="Modify the Windows PATH"),
+            Capability(
+                name="modify_environment_variable",
+                description="Modify a Windows environment variable",
+            ),
+            Capability(name="delete_files", description="Delete matching local files"),
         ]
     if tool_catalog is not None:
         capabilities.extend(

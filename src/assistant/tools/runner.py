@@ -19,6 +19,7 @@ class ToolRunResult:
     result: dict | None = None
     error_code: str | None = None
     message: str = ""
+    retry_safe: bool = False
 
 
 class ToolRunner:
@@ -32,6 +33,11 @@ class ToolRunner:
 
     def run(self, tool: CatalogTool, arguments: dict) -> ToolRunResult:
         manifest = tool.manifest
+        retry_safe = (
+            not manifest.permissions.filesystem.write
+            and not manifest.permissions.network.enabled
+            and not manifest.permissions.subprocess.executables
+        )
         errors = list(Draft202012Validator(manifest.input_schema).iter_errors(arguments))
         if errors:
             return ToolRunResult(
@@ -75,7 +81,12 @@ class ToolRunner:
                 tool,
                 {"code": "timeout"},
             )
-            return ToolRunResult(ok=False, error_code="timeout", message="tool timed out")
+            return ToolRunResult(
+                ok=False,
+                error_code="timeout",
+                message="tool timed out",
+                retry_safe=retry_safe,
+            )
 
         output_bytes = process.stdout.encode("utf-8", errors="replace")
         if len(output_bytes) > manifest.execution.max_output_bytes:

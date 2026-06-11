@@ -21,6 +21,8 @@ from assistant.memory.policy import MemoryPolicy
 from assistant.memory.repository import MemoryRepository
 from assistant.memory.session import SessionMemory
 from assistant.planner import Planner
+from assistant.recovery.engine import RecoveryEngine
+from assistant.recovery.repository import RecoveryRepository
 from assistant.tools.audit import ToolAuditLog
 from assistant.tools.catalog import ToolCatalog
 from assistant.tools.runner import ToolRunner
@@ -131,6 +133,11 @@ class RuntimeFactory:
             ),
             confirmer=confirmer,
             file_resolver=FileResolver(),
+            recovery_engine=RecoveryEngine(
+                repository=RecoveryRepository(
+                    self._config.recovery_audit_file
+                )
+            ),
         )
 
     @staticmethod

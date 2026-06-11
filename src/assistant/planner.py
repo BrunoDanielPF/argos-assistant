@@ -259,6 +259,77 @@ class Planner:
         lowered_input = normalized_input.lower()
         context = context or {}
 
+        environment_change = re.search(
+            r"configure\s+uma\s+vari[aÃ¡]vel\s+de\s+ambiente\s+"
+            r"chamada\s+([A-Za-z_][A-Za-z0-9_]*)\s+com\s+valor\s+(.+)",
+            normalized_input,
+            flags=re.IGNORECASE,
+        )
+        if environment_change:
+            return {
+                "mode": "action",
+                "capability": "modify_environment_variable",
+                "arguments": {
+                    "name": environment_change.group(1),
+                    "value": environment_change.group(2).strip(),
+                    "scope": "user",
+                },
+            }
+
+        path_change = re.search(
+            r"(?:adicione|adicionar|altere|alterar)\s+(.+?)\s+ao\s+path"
+            r"(?:\s+do\s+(usuario|usuÃ¡rio|sistema))?",
+            normalized_input,
+            flags=re.IGNORECASE,
+        )
+        if path_change:
+            scope = path_change.group(2) or "user"
+            return {
+                "mode": "action",
+                "capability": "modify_path",
+                "arguments": {
+                    "value": path_change.group(1).strip().strip('"'),
+                    "scope": "system" if scope.lower() == "sistema" else "user",
+                },
+            }
+
+        delete_match = re.search(
+            r"(?:apague|apagar|delete|exclua|excluir).+?"
+            r"(\*\.[a-zA-Z0-9]+|\.[a-zA-Z0-9]+)",
+            normalized_input,
+            flags=re.IGNORECASE,
+        )
+        if delete_match:
+            pattern = delete_match.group(1)
+            if pattern.startswith("."):
+                pattern = f"*{pattern}"
+            root = context.get("current_cwd") or context.get("default_search_root") or "."
+            return {
+                "mode": "action",
+                "capability": "delete_files",
+                "arguments": {
+                    "path": str(root),
+                    "pattern": pattern,
+                },
+            }
+
+        create_file = re.search(
+            r"(?:crie|criar)\s+um\s+arquivo\s+"
+            r"(?:chamado\s+)?([A-Za-z0-9_.-]+\.[A-Za-z0-9]+)",
+            normalized_input,
+            flags=re.IGNORECASE,
+        )
+        if create_file:
+            root = context.get("current_cwd") or context.get("user_home") or "."
+            return {
+                "mode": "action",
+                "capability": "create_file",
+                "arguments": {
+                    "path": str(Path(str(root)) / create_file.group(1)),
+                    "content": "",
+                },
+            }
+
         if any(term in lowered_input for term in ("me lembre", "lembrete", "lembrar daqui")):
             return self._heuristic_reminder_plan(normalized_input)
 
