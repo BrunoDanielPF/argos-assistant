@@ -59,6 +59,7 @@ class WorkflowTriggerType(StrEnum):
     MANUAL = "manual"
     SCHEDULE = "schedule"
     FILE_CREATED = "file_created"
+    JOB_FAILED = "job_failed"
 
 
 class WorkflowStrategy(StrEnum):
