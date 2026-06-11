@@ -231,6 +231,9 @@ def test_16_logs_redact_sensitive_values(monkeypatch, tmp_path):
         "api_key": "api-key-value",
         "private_key": "private-key-value",
         "nested": {"API-Key": "nested-api-key-value"},
+        "tokens": ["plural-token-value"],
+        "passwords": {"service": "plural-password-value"},
+        "secrets": "plural-secret-value",
     }
     workflow = noop_workflow(with_args=secrets)
     repository = WorkflowRepository(database)
@@ -257,6 +260,9 @@ def test_16_logs_redact_sensitive_values(monkeypatch, tmp_path):
         "private-key-value",
         "nested-api-key-value",
         "trigger-token-value",
+        "plural-token-value",
+        "plural-password-value",
+        "plural-secret-value",
     ):
         assert value not in result.stdout
 

@@ -6,10 +6,15 @@ REDACTED = "[REDACTED]"
 
 _SENSITIVE_KEYS = {
     "secret",
+    "secrets",
     "token",
+    "tokens",
     "password",
+    "passwords",
     "apikey",
+    "apikeys",
     "privatekey",
+    "privatekeys",
 }
 
 
