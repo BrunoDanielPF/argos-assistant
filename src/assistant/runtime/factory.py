@@ -13,7 +13,12 @@ from assistant.jobs.repository import JobRepository
 from assistant.execution.policy import decide_policy
 from assistant.files.resolver import FileResolver
 from assistant.llm.ollama_client import OllamaClient
+from assistant.memory.classifier import MemoryClassifier
+from assistant.memory.engine import MemoryEngine
 from assistant.memory.long_term import LongTermMemoryStore
+from assistant.memory.migration import MarkdownMemoryMigrator
+from assistant.memory.policy import MemoryPolicy
+from assistant.memory.repository import MemoryRepository
 from assistant.memory.session import SessionMemory
 from assistant.planner import Planner
 from assistant.tools.audit import ToolAuditLog
@@ -27,9 +32,28 @@ class RuntimeFactory:
         self,
         config: AppConfig,
         loading_context: Callable | None = None,
+        memory_engine=None,
     ) -> None:
         self._config = config
         self._loading_context = loading_context or (lambda: nullcontext())
+        self._memory_engine = memory_engine
+
+    def _get_memory_engine(self):
+        if self._memory_engine is None:
+            repository = MemoryRepository(self._config.database_file)
+            legacy_store = LongTermMemoryStore(self._config.memory_dir)
+            MarkdownMemoryMigrator(repository, legacy_store).migrate()
+            self._memory_engine = MemoryEngine(
+                repository=repository,
+                classifier=MemoryClassifier(
+                    MemoryPolicy(
+                        allow_auto_save_low_risk=(
+                            self._config.memory_auto_save_low_risk
+                        )
+                    )
+                ),
+            )
+        return self._memory_engine
 
     def build_tool_catalog(self) -> ToolCatalog:
         bundled_root = Path(__file__).resolve().parents[3] / "tools"
@@ -93,6 +117,7 @@ class RuntimeFactory:
             planner=planner,
             executor=executor,
             memory=session_memory,
+            memory_engine=self._get_memory_engine(),
             long_term_memory=LongTermMemoryStore(self._config.memory_dir),
             policy_decider=lambda capability: (
                 "confirm"

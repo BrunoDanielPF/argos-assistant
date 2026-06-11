@@ -71,6 +71,7 @@ class AppConfig(BaseModel):
             os.environ.get("ARGOS_MEMORY_DIR", Path.home() / ".argos" / "memory")
         )
     )
+    memory_auto_save_low_risk: bool = False
     tools_dir: Path = Field(
         default_factory=lambda: Path(
             os.environ.get("ARGOS_TOOLS_DIR", Path.home() / ".argos" / "tools")
@@ -140,6 +141,7 @@ class AppConfig(BaseModel):
             "ARGOS_DATABASE_FILE": "database_file",
             "ARGOS_EVENT_LOG_FILE": "event_log_file",
             "ARGOS_MEMORY_DIR": "memory_dir",
+            "ARGOS_MEMORY_AUTO_SAVE_LOW_RISK": "memory_auto_save_low_risk",
             "ARGOS_TOOLS_DIR": "tools_dir",
             "ARGOS_TOOL_DRAFTS_DIR": "tool_drafts_dir",
             "ARGOS_TOOL_ENVS_DIR": "tool_envs_dir",

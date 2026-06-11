@@ -36,6 +36,14 @@ def test_config_precedence_is_env_then_yaml_then_default(tmp_path, monkeypatch):
     assert config.job_scheduler_interval_seconds == 2
 
 
+def test_memory_auto_save_can_be_enabled_from_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARGOS_MEMORY_AUTO_SAVE_LOW_RISK", "true")
+
+    config = AppConfig.load(tmp_path / "missing.yaml")
+
+    assert config.memory_auto_save_low_risk is True
+
+
 def test_config_rejects_gateway_bind_outside_loopback(tmp_path):
     config_file = tmp_path / "config.yaml"
     config_file.write_text(

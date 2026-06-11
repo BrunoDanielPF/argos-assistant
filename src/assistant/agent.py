@@ -4,6 +4,7 @@ from pathlib import Path
 
 from assistant.execution.policy import decide_policy
 from assistant.files.resolver import FileResolver
+from assistant.memory.models import MemoryRecord
 from assistant.memory.session import SessionMemory
 from assistant.models import AuditEvent
 from assistant.suggestions import build_suggestions
@@ -15,6 +16,7 @@ class AssistantAgent:
         planner,
         executor,
         memory: SessionMemory | None = None,
+        memory_engine=None,
         long_term_memory=None,
         policy_decider: Callable[[str], str] | None = None,
         action_validator: Callable[[str, dict], str | None] | None = None,
@@ -24,6 +26,7 @@ class AssistantAgent:
         self._planner = planner
         self._executor = executor
         self._memory = memory or SessionMemory()
+        self._memory_engine = memory_engine
         self._long_term_memory = long_term_memory
         self._policy_decider = policy_decider or decide_policy
         self._action_validator = action_validator or (lambda capability, arguments: None)
@@ -307,6 +310,20 @@ class AssistantAgent:
         return any(marker in normalized for marker in reset_markers)
 
     def handle(self, user_input: str) -> dict:
+        result = self._handle(user_input)
+        if self._memory_engine is not None:
+            try:
+                context = self._memory.snapshot().get("context", {})
+                self._memory_engine.observe(
+                    user_input,
+                    result.get("message", ""),
+                    context,
+                )
+            except Exception:
+                pass
+        return result
+
+    def _handle(self, user_input: str) -> dict:
         snapshot = self._memory.snapshot()
         previous_history = snapshot.get("history", [])
         snapshot_context = dict(snapshot.get("context") or {})
@@ -320,10 +337,23 @@ class AssistantAgent:
         if "context" in planner_params:
             context = dict(snapshot_context)
             context["conversation_history"] = previous_history[-10:]
-            if self._long_term_memory is not None:
+            long_term_memories = []
+            if self._memory_engine is not None:
+                try:
+                    structured_memories = self._memory_engine.retrieve(
+                        user_input,
+                        context,
+                    )
+                    long_term_memories = [
+                        self._memory_record_to_context(memory)
+                        for memory in structured_memories
+                    ]
+                except Exception:
+                    long_term_memories = []
+            if not long_term_memories and self._long_term_memory is not None:
                 long_term_memories = self._long_term_memory.search(user_input, max_results=5)
-                if long_term_memories:
-                    context["long_term_memories"] = long_term_memories
+            if long_term_memories:
+                context["long_term_memories"] = long_term_memories
             plan = self._planner.create_plan(
                 user_input,
                 context=context,
@@ -443,3 +473,17 @@ class AssistantAgent:
             "message": answer,
             "suggestions": [item.model_dump() for item in suggestions],
         }
+
+    @staticmethod
+    def _memory_record_to_context(memory) -> dict:
+        if isinstance(memory, dict):
+            return memory
+        if isinstance(memory, MemoryRecord):
+            return {
+                "memory_id": memory.id,
+                "memory_type": memory.type.value,
+                "learning": memory.content,
+                "context": memory.scope_value or memory.scope,
+                "source": memory.source,
+            }
+        raise TypeError("Unsupported memory result")

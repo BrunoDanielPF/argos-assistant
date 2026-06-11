@@ -1,6 +1,12 @@
 from assistant.agent import AssistantAgent
 from assistant.execution.executor import ActionExecutor
 from assistant.files.resolver import FileResolver
+from assistant.memory.models import (
+    MemoryCandidate,
+    MemoryRecord,
+    MemoryStatus,
+    MemoryType,
+)
 from assistant.memory.session import SessionMemory
 from assistant.planner import Planner
 
@@ -244,6 +250,70 @@ def test_agent_injects_relevant_long_term_memories_into_context():
             "source_file": "correcoes.md",
         }
     ]
+
+
+def test_agent_retrieves_and_observes_with_memory_engine():
+    class ContextPlanner:
+        def __init__(self) -> None:
+            self.context = None
+
+        def create_plan(self, user_input: str, context: dict | None = None) -> dict:
+            self.context = context
+            return {"mode": "answer", "content": "Resposta objetiva"}
+
+    class FakeMemoryEngine:
+        def __init__(self) -> None:
+            self.observed = None
+
+        def retrieve(self, query: str, context: dict) -> list[MemoryRecord]:
+            candidate = MemoryCandidate(
+                type=MemoryType.USER_PREFERENCE,
+                content="O usuario prefere respostas objetivas.",
+                scope="user",
+            )
+            return [
+                MemoryRecord(
+                    type=candidate.type,
+                    status=MemoryStatus.ACTIVE,
+                    content=candidate.content,
+                    scope=candidate.scope,
+                    importance=candidate.importance,
+                    confidence=candidate.confidence,
+                    source=candidate.source,
+                    observed_at=candidate.observed_at,
+                )
+            ]
+
+        def observe(
+            self,
+            user_input: str,
+            assistant_response: str,
+            context: dict,
+        ) -> list:
+            self.observed = (user_input, assistant_response, context)
+            return []
+
+    planner = ContextPlanner()
+    memory_engine = FakeMemoryEngine()
+    agent = AssistantAgent(
+        planner=planner,
+        executor=FakeExecutor(),
+        memory_engine=memory_engine,
+    )
+
+    response = agent.handle("como devo responder?")
+
+    assert response["ok"] is True
+    assert planner.context["long_term_memories"][0]["learning"] == (
+        "O usuario prefere respostas objetivas."
+    )
+    assert planner.context["long_term_memories"][0]["memory_type"] == (
+        "user_preference"
+    )
+    assert memory_engine.observed[0:2] == (
+        "como devo responder?",
+        "Resposta objetiva",
+    )
 
 
 def test_agent_injects_previous_conversation_into_planner_context():
