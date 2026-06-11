@@ -11,6 +11,7 @@ from assistant.workflows.models import (
     WorkflowRunStepStatus,
 )
 from assistant.workflows.policies import WorkflowPolicyEvaluator
+from assistant.workflows.redaction import redact_sensitive
 from assistant.workflows.repository import WorkflowRepository
 
 
@@ -40,7 +41,9 @@ class SequentialWorkflowRunner:
             WorkflowRun(
                 workflow_id=workflow.id,
                 trigger_event=(
-                    dict(trigger_event) if trigger_event is not None else None
+                    redact_sensitive(dict(trigger_event))
+                    if trigger_event is not None
+                    else None
                 ),
                 audit_id=str(uuid4()),
             )
@@ -63,7 +66,7 @@ class SequentialWorkflowRunner:
                 WorkflowRunStep(
                     run_id=run.id,
                     step_id=step.id,
-                    input_json=arguments,
+                    input_json=redact_sensitive(arguments),
                 )
             )
             decision = self._policy_evaluator.evaluate(workflow, step)
@@ -115,7 +118,7 @@ class SequentialWorkflowRunner:
                 self._repository.update_run_step_status(
                     run_step.id,
                     WorkflowRunStepStatus.SUCCEEDED,
-                    output_json=result.output,
+                    output_json=redact_sensitive(result.output),
                 )
                 continue
 
@@ -123,7 +126,7 @@ class SequentialWorkflowRunner:
             self._repository.update_run_step_status(
                 run_step.id,
                 WorkflowRunStepStatus.FAILED,
-                output_json=result.output,
+                output_json=redact_sensitive(result.output),
                 error=error,
             )
             if not step.continue_on_error:

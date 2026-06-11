@@ -28,6 +28,7 @@ from assistant.workflows.planner import (
     UnsupportedWorkflowDescription,
 )
 from assistant.workflows.repository import WorkflowRepository
+from assistant.workflows.redaction import redact_sensitive
 from assistant.workflows.runner import SequentialWorkflowRunner
 from assistant.workflows.validator import WorkflowValidator
 from assistant.gateway.client import GatewayClient, GatewayError, GatewayUnavailable
@@ -517,6 +518,7 @@ def workflows_inspect(workflow_id: str) -> None:
             ensure_ascii=False,
         ),
         markup=False,
+        soft_wrap=True,
     )
 
 
@@ -635,8 +637,12 @@ def workflows_logs(workflow_id: str) -> None:
             if step.output_json is not None:
                 console.print(
                     "  output="
-                    + json.dumps(step.output_json, ensure_ascii=False),
+                    + json.dumps(
+                        redact_sensitive(step.output_json),
+                        ensure_ascii=False,
+                    ),
                     markup=False,
+                    soft_wrap=True,
                 )
 
 
