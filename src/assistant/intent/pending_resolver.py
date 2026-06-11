@@ -118,7 +118,29 @@ class PendingClarificationResolver:
     def _is_help(self, normalized: str) -> bool:
         if normalized in {"/help", "help", "ajuda"}:
             return True
-        return any(marker in normalized for marker in self._HELP_MARKERS[3:])
+        if any(marker in normalized for marker in self._HELP_MARKERS[3:]):
+            return True
+        capability_terms = (
+            "habilidade",
+            "habilidades",
+            "capacidade",
+            "capacidades",
+            "comando",
+            "comandos",
+            "recursos",
+        )
+        inquiry_terms = (
+            "qual ",
+            "quais ",
+            "o que ",
+            "oque ",
+            "pode fazer",
+            "consegue fazer",
+        )
+        return (
+            any(term in normalized.split() for term in capability_terms)
+            and any(term in normalized for term in inquiry_terms)
+        )
 
     def _match_option(self, user_input: str, pending: dict) -> str | int | None:
         options = [

@@ -120,3 +120,13 @@ def test_pending_path_treats_explicit_file_creation_as_new_intent():
 
     assert resolution.status == PendingResolutionStatus.NEW_INTENT
     assert resolution.value is None
+
+
+def test_pending_path_recognizes_capability_question_by_meaning():
+    resolution = PendingClarificationResolver().resolve(
+        "qual as suas habilidades para me ajudar",
+        _path_pending(),
+    )
+
+    assert resolution.status == PendingResolutionStatus.HELP
+    assert resolution.value is None

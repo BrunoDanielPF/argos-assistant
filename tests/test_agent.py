@@ -845,6 +845,71 @@ def test_agent_help_clears_pending_path_without_calling_planner_or_executor():
     assert agent.memory.snapshot()["context"]["pending_clarification"] is None
 
 
+def test_agent_capability_question_by_meaning_clears_pending_as_help():
+    class FailIfCalledPlanner:
+        def create_plan(self, user_input: str, context: dict | None = None) -> dict:
+            raise AssertionError("planner should not run for capability help")
+
+    memory = SessionMemory()
+    memory.set_pending_clarification(
+        {
+            "field": "path",
+            "question": "Qual arquivo?",
+            "action": {
+                "capability": "write_file",
+                "arguments": {"content": "hello", "write_mode": "replace"},
+            },
+            "options": [],
+            "accept_free_text": True,
+        }
+    )
+    agent = AssistantAgent(
+        planner=FailIfCalledPlanner(),
+        executor=FakeExecutor(),
+        memory=memory,
+    )
+
+    response = agent.handle("qual as suas habilidades para me ajudar")
+
+    assert response["ok"] is True
+    assert "responder perguntas" in response["message"].lower()
+    assert agent.memory.snapshot()["context"]["pending_clarification"] is None
+
+
+def test_agent_math_question_clears_pending_and_reaches_planner():
+    calls = []
+
+    class MathPlanner:
+        def create_plan(self, user_input: str, context: dict | None = None) -> dict:
+            calls.append((user_input, context))
+            return {"mode": "answer", "content": "2 + 2 = 4"}
+
+    memory = SessionMemory()
+    memory.set_pending_clarification(
+        {
+            "field": "path",
+            "question": "Qual arquivo?",
+            "action": {
+                "capability": "write_file",
+                "arguments": {"content": "hello", "write_mode": "replace"},
+            },
+            "options": [],
+            "accept_free_text": True,
+        }
+    )
+    agent = AssistantAgent(
+        planner=MathPlanner(),
+        executor=FakeExecutor(),
+        memory=memory,
+    )
+
+    response = agent.handle("argos pode me ajudar quanto e 2 +2 ?")
+
+    assert response["message"] == "2 + 2 = 4"
+    assert calls[0][1]["pending_clarification"] is None
+    assert agent.memory.snapshot()["context"]["pending_clarification"] is None
+
+
 def test_agent_resolves_pending_path_filename_without_calling_planner(tmp_path):
     class FailIfCalledPlanner:
         def create_plan(self, user_input: str, context: dict | None = None) -> dict:
