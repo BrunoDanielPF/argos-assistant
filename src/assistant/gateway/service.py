@@ -176,14 +176,36 @@ class GatewayService:
         return ConfirmationRequest(
             confirmation_id=confirmation_id,
             capability=capability,
-            arguments_summary=self._summarize_arguments(arguments),
+            arguments_summary=self._summarize_arguments(
+                capability,
+                arguments,
+            ),
             permissions=self._describe_permissions(capability, arguments),
-            question=f"Autorizar a execucao de {capability}?",
+            question=(
+                "Criar a tool local em draft para revisao?"
+                if capability == "tool.provision_draft"
+                else f"Autorizar a execucao de {capability}?"
+            ),
             dry_run=payload.get("dry_run"),
         )
 
     @staticmethod
-    def _summarize_arguments(arguments: dict) -> dict:
+    def _summarize_arguments(
+        capability: str,
+        arguments: dict,
+    ) -> dict:
+        if capability == "tool.provision_draft":
+            definition = arguments.get("definition")
+            definition = (
+                definition if isinstance(definition, dict) else {}
+            )
+            return {
+                "requested_capability": arguments.get(
+                    "requested_capability"
+                ),
+                "tool_name": definition.get("name"),
+                "tool_version": definition.get("version"),
+            }
         summary = {}
         for key, value in arguments.items():
             if key == "content" and isinstance(value, str):
@@ -200,6 +222,8 @@ class GatewayService:
         capability: str,
         arguments: dict,
     ) -> list[str]:
+        if capability == "tool.provision_draft":
+            return ["create:local_tool_draft", "execute:none"]
         if capability in {"create_file", "write_file"}:
             return [f"write:{arguments.get('path', 'unknown')}"]
         if capability == "search_files":

@@ -1,4 +1,5 @@
 from assistant.agent import AssistantAgent
+from assistant.capabilities.provisioning import CapabilityProvisioningService
 from assistant.capabilities.registry import build_default_registry
 from assistant.execution.executor import ActionExecutor
 from assistant.execution.policy import decide_policy
@@ -6,6 +7,11 @@ from assistant.files.path_resolver import PathResolver
 from assistant.memory.session import SessionMemory
 from assistant.planner import Planner
 from assistant.recovery.dry_run import DryRunBuilder
+from assistant.recovery.engine import RecoveryEngine
+from assistant.recovery.repository import RecoveryRepository
+from assistant.tools.audit import ToolAuditLog
+from assistant.tools.generator import ToolDraftGenerator
+from assistant.tools.state import ToolStateStore
 
 
 class FailIfCalledClient:
@@ -34,6 +40,16 @@ def build_memory(tmp_path):
         user_home=str(tmp_path),
     )
     return memory
+
+
+def build_provisioning_service(tmp_path):
+    return CapabilityProvisioningService(
+        generator=ToolDraftGenerator(
+            tmp_path / "drafts",
+            ToolStateStore(tmp_path / "tool-state.json"),
+        ),
+        audit_log=ToolAuditLog(tmp_path / "tools-audit.jsonl"),
+    )
 
 
 def test_registry_is_source_of_truth_for_canonical_file_actions():
@@ -238,6 +254,101 @@ def test_shell_request_is_unsupported_without_confirmation(tmp_path):
     assert response["ok"] is False
     assert response["error_code"] == "unsupported_capability"
     assert "confirmation" not in response
+
+
+def test_shell_gap_proposes_draft_confirmation_without_execution(tmp_path):
+    agent = AssistantAgent(
+        planner=Planner(llm_client=FailIfCalledClient()),
+        executor=FailIfCalledExecutor(),
+        memory=build_memory(tmp_path),
+        capability_registry=build_default_registry(),
+        capability_provisioning_service=build_provisioning_service(tmp_path),
+        recovery_engine=RecoveryEngine(
+            repository=RecoveryRepository(tmp_path / "recovery.jsonl")
+        ),
+    )
+
+    response = agent.handle("rode o comando git status")
+
+    assert response["status"] == "waiting_confirmation"
+    assert response["error_code"] == "capability_gap"
+    assert response["confirmation"]["capability"] == "tool.provision_draft"
+    definition = response["confirmation"]["arguments"]["definition"]
+    assert definition["name"] == "local.git.status"
+    assert not (tmp_path / "drafts").exists()
+
+
+def test_approved_gap_confirmation_creates_draft_without_retry(tmp_path):
+    service = build_provisioning_service(tmp_path)
+    agent = AssistantAgent(
+        planner=Planner(llm_client=FailIfCalledClient()),
+        executor=FailIfCalledExecutor(),
+        memory=build_memory(tmp_path),
+        capability_registry=build_default_registry(),
+        capability_provisioning_service=service,
+    )
+    pending = agent.handle("rode o comando git status")
+
+    response = agent.execute_confirmed_action(
+        pending["confirmation"]["capability"],
+        pending["confirmation"]["arguments"],
+        approved=True,
+    )
+
+    assert response["ok"] is True
+    assert response["error_code"] == "capability_gap"
+    assert "validated" in response["message"]
+    assert str(tmp_path / "drafts" / "local.git.status" / "1.0.0") in (
+        response["message"]
+    )
+
+
+def test_environment_gap_proposes_windows_user_tool(tmp_path):
+    agent = AssistantAgent(
+        planner=Planner(llm_client=FailIfCalledClient()),
+        executor=FailIfCalledExecutor(),
+        memory=build_memory(tmp_path),
+        capability_registry=build_default_registry(),
+        capability_provisioning_service=build_provisioning_service(tmp_path),
+    )
+
+    response = agent.handle(
+        "configure uma variável de ambiente chamada ARGOS_TESTE_NOVA "
+        "com valor 456"
+    )
+
+    assert response["status"] == "waiting_confirmation"
+    assert response["error_code"] == "capability_gap"
+    proposal = response["confirmation"]["arguments"]
+    assert proposal["requested_capability"] == (
+        "modify_environment_variable"
+    )
+    assert proposal["definition"]["name"] == (
+        "local.windows.env_set_user"
+    )
+
+
+def test_destructive_shell_gap_does_not_propose_tool(tmp_path):
+    agent = AssistantAgent(
+        planner=StaticPlanner(
+            {
+                "mode": "action",
+                "capability": "shell.run",
+                "arguments": {"command": "rm -rf ."},
+            }
+        ),
+        executor=FailIfCalledExecutor(),
+        memory=build_memory(tmp_path),
+        capability_registry=build_default_registry(),
+        capability_provisioning_service=build_provisioning_service(tmp_path),
+    )
+
+    response = agent.handle("apague tudo")
+
+    assert response["status"] == "completed"
+    assert response["error_code"] == "policy_blocked"
+    assert "confirmation" not in response
+    assert not (tmp_path / "drafts").exists()
 
 
 def test_move_txt_files_is_not_confused_with_path_environment(tmp_path):

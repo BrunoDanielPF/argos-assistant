@@ -12,6 +12,7 @@ class StrictModel(BaseModel):
 
 class FailureType(StrEnum):
     UNSUPPORTED_CAPABILITY = "unsupported_capability"
+    CAPABILITY_GAP = "capability_gap"
     INVALID_SCHEMA = "invalid_schema"
     WRONG_INTENT = "wrong_intent"
     NO_RESULTS = "no_results"

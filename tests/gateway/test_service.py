@@ -129,6 +129,73 @@ def test_service_persists_confirmation_without_exposing_full_content(tmp_path):
     repository.close()
 
 
+def test_service_summarizes_tool_draft_confirmation(tmp_path):
+    class ProvisioningAgent:
+        def __init__(self, memory):
+            self.memory = memory
+
+        def handle(self, content):
+            return {
+                "ok": False,
+                "status": "waiting_confirmation",
+                "message": "Posso criar uma tool local em draft?",
+                "suggestions": [],
+                "error_code": "capability_gap",
+                "confirmation": {
+                    "capability": "tool.provision_draft",
+                    "arguments": {
+                        "proposal_id": "proposal-1",
+                        "status": "proposed",
+                        "requested_capability": "shell.run",
+                        "user_goal": content,
+                        "arguments": {"command": "git status"},
+                        "platform_context": {},
+                        "original_action": {},
+                        "reason": None,
+                        "definition": {
+                            "name": "local.git.status",
+                            "version": "1.0.0",
+                            "title": "Git Status",
+                            "description": "Executa git status.",
+                            "input_schema": {},
+                            "output_schema": {},
+                            "permissions": {},
+                            "execution": {},
+                            "handler_body": "conteudo interno sensivel",
+                        },
+                    },
+                },
+            }
+
+    class ProvisioningFactory:
+        def build_agent(self, memory=None, confirmer=None):
+            return ProvisioningAgent(memory or SessionMemory())
+
+    repository = SessionRepository(tmp_path / "argos.db")
+    service = GatewayService(ProvisioningFactory(), repository)
+
+    response = service.handle(
+        AgentRequest(session_id="default", content="rode git status")
+    )
+
+    assert response.confirmation.question == (
+        "Criar a tool local em draft para revisao?"
+    )
+    assert response.confirmation.arguments_summary == {
+        "requested_capability": "shell.run",
+        "tool_name": "local.git.status",
+        "tool_version": "1.0.0",
+    }
+    assert response.confirmation.permissions == [
+        "create:local_tool_draft",
+        "execute:none",
+    ]
+    assert "conteudo interno sensivel" not in str(
+        response.confirmation.arguments_summary
+    )
+    repository.close()
+
+
 def test_service_resumes_approved_confirmation_after_restart(tmp_path):
     class ConfirmationAgent:
         def __init__(self, memory):

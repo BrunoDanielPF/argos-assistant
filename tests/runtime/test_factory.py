@@ -49,6 +49,7 @@ def test_factory_builds_agent_with_provided_memory(monkeypatch, tmp_path):
 
     assert agent.memory is memory
     assert agent._recovery_engine is not None
+    assert agent._capability_provisioning_service is not None
 
 
 def test_factory_injects_provided_memory_engine(monkeypatch, tmp_path):

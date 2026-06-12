@@ -410,6 +410,23 @@ class Planner:
                 },
             }
 
+        environment_change_accented = re.search(
+            r"configure\s+uma\s+variável\s+de\s+ambiente\s+"
+            r"chamada\s+([A-Za-z_][A-Za-z0-9_]*)\s+com\s+valor\s+(.+)",
+            normalized_input,
+            flags=re.IGNORECASE,
+        )
+        if environment_change_accented:
+            return {
+                "mode": "action",
+                "capability": "modify_environment_variable",
+                "arguments": {
+                    "name": environment_change_accented.group(1),
+                    "value": environment_change_accented.group(2).strip(),
+                    "scope": "user",
+                },
+            }
+
         environment_change = re.search(
             r"configure\s+uma\s+vari[aÃ¡]vel\s+de\s+ambiente\s+"
             r"chamada\s+([A-Za-z_][A-Za-z0-9_]*)\s+com\s+valor\s+(.+)",

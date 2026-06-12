@@ -6,6 +6,7 @@ from pathlib import Path
 from jsonschema import Draft202012Validator
 
 from assistant.agent import AssistantAgent
+from assistant.capabilities.provisioning import CapabilityProvisioningService
 from assistant.capabilities.registry import build_default_registry
 from assistant.config import AppConfig
 from assistant.execution.executor import ActionExecutor
@@ -28,6 +29,7 @@ from assistant.recovery.policy import RecoveryPolicy
 from assistant.recovery.repository import RecoveryRepository
 from assistant.tools.audit import ToolAuditLog
 from assistant.tools.catalog import ToolCatalog
+from assistant.tools.generator import ToolDraftGenerator
 from assistant.tools.runner import ToolRunner
 from assistant.tools.state import ToolStateStore
 
@@ -147,6 +149,15 @@ class RuntimeFactory:
                 )
             ),
             capability_registry=capability_registry,
+            capability_provisioning_service=CapabilityProvisioningService(
+                generator=ToolDraftGenerator(
+                    self._config.tool_drafts_dir,
+                    ToolStateStore(self._config.tool_state_file),
+                ),
+                audit_log=ToolAuditLog(
+                    self._config.tool_audit_file
+                ),
+            ),
         )
 
     @staticmethod

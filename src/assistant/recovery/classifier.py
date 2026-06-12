@@ -47,6 +47,7 @@ def _is_sensitive_key(key: object) -> bool:
 class FailureClassifier:
     _CODE_MAP = {
         "unsupported_capability": FailureType.UNSUPPORTED_CAPABILITY,
+        "capability_gap": FailureType.CAPABILITY_GAP,
         "invalid_schema": FailureType.INVALID_SCHEMA,
         "wrong_intent": FailureType.WRONG_INTENT,
         "no_results": FailureType.NO_RESULTS,

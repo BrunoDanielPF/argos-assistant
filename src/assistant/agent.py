@@ -1,10 +1,14 @@
 from collections.abc import Callable
 import inspect
 from pathlib import Path
+import sys
 
 from assistant.capabilities.registry import (
     CapabilityRegistry,
     build_default_registry,
+)
+from assistant.capabilities.provisioning import (
+    CapabilityProvisioningProposal,
 )
 from assistant.execution.policy import decide_policy
 from assistant.files.resolver import FileResolver
@@ -38,6 +42,7 @@ class AssistantAgent:
         recovery_engine=None,
         capability_registry: CapabilityRegistry | None = None,
         path_resolver: PathResolver | None = None,
+        capability_provisioning_service=None,
     ) -> None:
         self._planner = planner
         self._executor = executor
@@ -57,6 +62,9 @@ class AssistantAgent:
             else (None if has_custom_policy else build_default_registry())
         )
         self._path_resolver = path_resolver or PathResolver()
+        self._capability_provisioning_service = (
+            capability_provisioning_service
+        )
 
     @property
     def memory(self) -> SessionMemory:
@@ -305,6 +313,46 @@ class AssistantAgent:
                 policy="confirm",
                 decision="rejected",
                 reason="user_rejected",
+            )
+        if capability_name == "tool.provision_draft":
+            if self._capability_provisioning_service is None:
+                return self._build_response(
+                    ok=False,
+                    message="Capability provisioning is not configured.",
+                    capability_name=capability_name,
+                    policy="confirm",
+                    decision="approved",
+                    reason="provisioning_unavailable",
+                    error_code="capability_gap",
+                )
+            try:
+                proposal = CapabilityProvisioningProposal.model_validate(
+                    arguments
+                )
+                draft = self._capability_provisioning_service.create_draft(
+                    proposal
+                )
+            except Exception as exc:
+                return self._build_response(
+                    ok=False,
+                    message=f"Nao foi possivel criar o draft: {exc}",
+                    capability_name=capability_name,
+                    policy="confirm",
+                    decision="approved",
+                    reason="draft_generation_failed",
+                    error_code="capability_gap",
+                )
+            return self._build_response(
+                ok=True,
+                message=(
+                    f"Tool draft criada em {draft.path}. "
+                    f"Status: {draft.state}. A tool permanece desabilitada."
+                ),
+                capability_name=capability_name,
+                policy="confirm",
+                decision="approved",
+                reason="draft_created",
+                error_code="capability_gap",
             )
         context = self._memory.snapshot().get("context", {})
         if self._capability_registry is not None:
@@ -626,6 +674,82 @@ class AssistantAgent:
             )
         return (canonical, final_validation.arguments, policy), None
 
+    def _build_capability_gap_response(
+        self,
+        *,
+        user_goal: str,
+        capability_name: str,
+        arguments: dict,
+        context: dict,
+        original_action: dict,
+    ) -> dict:
+        assert self._capability_provisioning_service is not None
+        platform_context = dict(context)
+        platform_context["platform"] = sys.platform
+        proposal = self._capability_provisioning_service.propose(
+            requested_capability=capability_name,
+            user_goal=user_goal,
+            arguments=dict(arguments),
+            platform_context=platform_context,
+            original_action=dict(original_action),
+        )
+        if self._recovery_engine is not None:
+            self._recovery_engine.handle_failure(
+                source="planner",
+                operation=capability_name,
+                message=f"Capability gap: {capability_name}",
+                arguments=arguments,
+                error_code="capability_gap",
+                metadata={
+                    "proposal_status": proposal.status,
+                    "proposal_id": proposal.proposal_id,
+                },
+            )
+        if not proposal.can_create:
+            return self._build_response(
+                ok=False,
+                message=(
+                    "Ainda nao tenho essa capacidade e nao encontrei um "
+                    "template local seguro para criar em draft."
+                ),
+                capability_name=capability_name,
+                policy="blocked",
+                decision="blocked",
+                reason=proposal.reason,
+                error_code="capability_gap",
+            )
+
+        message = (
+            "Ainda não tenho essa capacidade. Posso criar uma tool local "
+            "em draft para você revisar?"
+        )
+        self._memory.add_assistant_message(message)
+        self._memory.add_audit_event(
+            AuditEvent(
+                kind="confirmation",
+                message=message,
+                capability="tool.provision_draft",
+                policy="confirm",
+                decision="pending",
+                reason="capability_gap",
+            )
+        )
+        suggestions = build_suggestions("answer", message)
+        self._memory.set_suggestions(suggestions)
+        return {
+            "ok": False,
+            "status": "waiting_confirmation",
+            "message": message,
+            "suggestions": [
+                item.model_dump() for item in suggestions
+            ],
+            "error_code": "capability_gap",
+            "confirmation": {
+                "capability": "tool.provision_draft",
+                "arguments": proposal.model_dump(),
+            },
+        }
+
     @staticmethod
     def _format_pending_question(pending: dict) -> str:
         lines = [str(pending["question"])]
@@ -839,6 +963,18 @@ class AssistantAgent:
                     decision="blocked",
                     reason="policy_blocked",
                     error_code="policy_blocked",
+                )
+            if (
+                self._capability_registry is not None
+                and self._capability_registry.resolve(capability_name) is None
+                and self._capability_provisioning_service is not None
+            ):
+                return self._build_capability_gap_response(
+                    user_goal=user_input,
+                    capability_name=capability_name,
+                    arguments=plan["arguments"],
+                    context=snapshot_context,
+                    original_action=plan,
                 )
             policy = None
             if self._capability_registry is not None:
