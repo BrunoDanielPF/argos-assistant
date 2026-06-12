@@ -30,6 +30,7 @@ from assistant.recovery.repository import RecoveryRepository
 from assistant.tools.audit import ToolAuditLog
 from assistant.tools.catalog import ToolCatalog
 from assistant.tools.generator import ToolDraftGenerator
+from assistant.tools.installer import ToolInstaller
 from assistant.tools.runner import ToolRunner
 from assistant.tools.state import ToolStateStore
 
@@ -77,6 +78,9 @@ class RuntimeFactory:
         confirmer=None,
     ) -> AssistantAgent:
         tool_catalog = self.build_tool_catalog()
+        tool_state_store = ToolStateStore(
+            self._config.tool_state_file
+        )
         capability_registry = build_default_registry(tool_catalog)
         capabilities = [
             item.name for item in capability_registry.list_all()
@@ -152,7 +156,13 @@ class RuntimeFactory:
             capability_provisioning_service=CapabilityProvisioningService(
                 generator=ToolDraftGenerator(
                     self._config.tool_drafts_dir,
-                    ToolStateStore(self._config.tool_state_file),
+                    tool_state_store,
+                ),
+                state_store=tool_state_store,
+                installer=ToolInstaller(
+                    tools_root=self._config.tools_dir,
+                    envs_root=self._config.tool_envs_dir,
+                    state_store=tool_state_store,
                 ),
                 audit_log=ToolAuditLog(
                     self._config.tool_audit_file

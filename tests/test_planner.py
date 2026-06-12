@@ -254,6 +254,41 @@ def test_planner_routes_shell_command_without_treating_it_as_a_file():
     }
 
 
+def test_planner_prefers_enabled_local_git_status_capability():
+    planner = Planner(
+        llm_client=FailIfCalledClient(),
+        capabilities=["local.git.status"],
+    )
+
+    plan = planner.create_plan(
+        "rode o comando git status",
+        context={"current_cwd": "C:\\workspace"},
+    )
+
+    assert plan == {
+        "mode": "action",
+        "capability": "local.git.status",
+        "arguments": {"cwd": "C:\\workspace"},
+    }
+
+
+def test_planner_prefers_enabled_windows_environment_capability():
+    planner = Planner(
+        llm_client=FailIfCalledClient(),
+        capabilities=["local.windows.env_set_user"],
+    )
+
+    plan = planner.create_plan(
+        "configure uma variável de ambiente chamada TESTE com valor 456"
+    )
+
+    assert plan == {
+        "mode": "action",
+        "capability": "local.windows.env_set_user",
+        "arguments": {"name": "TESTE", "value": "456"},
+    }
+
+
 def test_planner_routes_bulk_txt_move_without_confusing_it_with_path():
     planner = Planner(llm_client=FailIfCalledClient())
 

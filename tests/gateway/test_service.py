@@ -246,3 +246,106 @@ def test_service_resumes_approved_confirmation_after_restart(tmp_path):
         == "approved"
     )
     repository.close()
+
+
+def test_service_reloads_session_agent_and_persists_retry_confirmation(
+    tmp_path,
+):
+    class LifecycleAgent:
+        def __init__(self, memory, generation):
+            self.memory = memory
+            self.generation = generation
+            self.reload_recorded = False
+
+        def handle(self, content):
+            return {
+                "ok": False,
+                "status": "waiting_confirmation",
+                "message": "Aprovar tool?",
+                "suggestions": [],
+                "confirmation": {
+                    "capability": "tool.approve_install_enable",
+                    "arguments": {"draft_path": "draft"},
+                },
+            }
+
+        def execute_confirmed_action(
+            self,
+            capability,
+            arguments,
+            approved,
+        ):
+            assert self.generation == 1
+            return {
+                "ok": True,
+                "status": "registry_reload_required",
+                "message": "Tool habilitada.",
+                "suggestions": [],
+                "reload": {
+                    "proposal_id": "proposal-1",
+                    "tool_name": "local.windows.env_set_user",
+                    "tool_version": "1.0.0",
+                    "state": "enabled",
+                    "installed_path": "tools/local.windows.env_set_user/1.0.0",
+                    "original_action": {
+                        "mode": "action",
+                        "capability": "modify_environment_variable",
+                        "arguments": {"name": "TESTE", "value": "456"},
+                    },
+                },
+            }
+
+        def record_registry_reload(self, payload):
+            assert self.generation == 2
+            self.reload_recorded = True
+
+        def prepare_provisioned_retry(self, payload):
+            assert self.generation == 2
+            assert self.reload_recorded is True
+            return {
+                "ok": False,
+                "status": "waiting_confirmation",
+                "message": "Confirmar retry?",
+                "suggestions": [],
+                "confirmation": {
+                    "capability": "local.windows.env_set_user",
+                    "arguments": {"name": "TESTE", "value": "456"},
+                    "dry_run": {
+                        "action": "local.windows.env_set_user",
+                    },
+                },
+            }
+
+    class LifecycleFactory:
+        def __init__(self):
+            self.build_count = 0
+
+        def build_agent(self, memory=None, confirmer=None):
+            self.build_count += 1
+            return LifecycleAgent(
+                memory or SessionMemory(),
+                self.build_count,
+            )
+
+    repository = SessionRepository(tmp_path / "argos.db")
+    factory = LifecycleFactory()
+    service = GatewayService(factory, repository)
+    pending = service.handle(
+        AgentRequest(session_id="default", content="habilite a tool")
+    )
+
+    result = service.resolve_confirmation(
+        pending.confirmation.confirmation_id,
+        approved=True,
+    )
+
+    assert factory.build_count == 2
+    assert result.status == "waiting_confirmation"
+    assert result.confirmation.capability == (
+        "local.windows.env_set_user"
+    )
+    stored = repository.load_confirmation(
+        result.confirmation.confirmation_id
+    )
+    assert stored["arguments"] == {"name": "TESTE", "value": "456"}
+    repository.close()

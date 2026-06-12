@@ -11,6 +11,7 @@ from assistant.recovery.engine import RecoveryEngine
 from assistant.recovery.repository import RecoveryRepository
 from assistant.tools.audit import ToolAuditLog
 from assistant.tools.generator import ToolDraftGenerator
+from assistant.tools.installer import ToolInstaller
 from assistant.tools.state import ToolStateStore
 
 
@@ -43,10 +44,18 @@ def build_memory(tmp_path):
 
 
 def build_provisioning_service(tmp_path):
+    state_store = ToolStateStore(tmp_path / "tool-state.json")
     return CapabilityProvisioningService(
         generator=ToolDraftGenerator(
             tmp_path / "drafts",
-            ToolStateStore(tmp_path / "tool-state.json"),
+            state_store,
+        ),
+        state_store=state_store,
+        installer=ToolInstaller(
+            tools_root=tmp_path / "tools",
+            envs_root=tmp_path / "envs",
+            state_store=state_store,
+            create_environment=False,
         ),
         audit_log=ToolAuditLog(tmp_path / "tools-audit.jsonl"),
     )
@@ -295,12 +304,125 @@ def test_approved_gap_confirmation_creates_draft_without_retry(tmp_path):
         approved=True,
     )
 
-    assert response["ok"] is True
+    assert response["ok"] is False
+    assert response["status"] == "waiting_confirmation"
     assert response["error_code"] == "capability_gap"
-    assert "validated" in response["message"]
-    assert str(tmp_path / "drafts" / "local.git.status" / "1.0.0") in (
-        response["message"]
+    assert response["confirmation"]["capability"] == (
+        "tool.approve_install_enable"
     )
+    original_action = response["confirmation"]["arguments"][
+        "original_action"
+    ]
+    assert original_action["capability"] == "shell.run"
+    assert original_action["arguments"] == {"command": "git status"}
+    assert original_action["context"]["current_cwd"] == str(tmp_path)
+
+
+def test_approved_tool_lifecycle_requests_registry_reload(tmp_path):
+    service = build_provisioning_service(tmp_path)
+    agent = AssistantAgent(
+        planner=Planner(llm_client=FailIfCalledClient()),
+        executor=FailIfCalledExecutor(),
+        memory=build_memory(tmp_path),
+        capability_registry=build_default_registry(),
+        capability_provisioning_service=service,
+    )
+    proposal = agent.handle(
+        "configure uma variável de ambiente chamada TESTE com valor 456"
+    )
+    draft = agent.execute_confirmed_action(
+        proposal["confirmation"]["capability"],
+        proposal["confirmation"]["arguments"],
+        approved=True,
+    )
+
+    response = agent.execute_confirmed_action(
+        draft["confirmation"]["capability"],
+        draft["confirmation"]["arguments"],
+        approved=True,
+    )
+
+    assert response["status"] == "registry_reload_required"
+    assert response["reload"]["tool_name"] == (
+        "local.windows.env_set_user"
+    )
+    assert response["reload"]["original_action"]["capability"] == (
+        "modify_environment_variable"
+    )
+
+
+def test_fresh_agent_prepares_original_environment_action_for_confirmation(
+    tmp_path,
+):
+    calls = []
+
+    service = build_provisioning_service(tmp_path)
+    proposal = service.propose(
+        requested_capability="windows.env.set_user",
+        user_goal="configure TESTE com valor 456",
+        arguments={"name": "TESTE", "value": "456"},
+        platform_context={"platform": "win32"},
+        original_action={
+            "mode": "action",
+            "capability": "modify_environment_variable",
+            "arguments": {
+                "name": "TESTE",
+                "value": "456",
+                "scope": "user",
+            },
+        },
+    )
+    draft = service.create_draft(proposal)
+    enabled = service.approve_install_enable(
+        proposal=proposal,
+        draft_path=draft.path,
+    )
+
+    from assistant.capabilities.registry import CapabilityRegistry, Capability
+    from assistant.capabilities.registry import ActionSchema
+
+    class EnvAction(ActionSchema):
+        name: str
+        value: str
+
+    registry = CapabilityRegistry(
+        build_default_registry().list_all()
+        + [
+            Capability(
+                name="local.windows.env_set_user",
+                description="test",
+                schema=EnvAction,
+                policy="confirm",
+            )
+        ]
+    )
+    agent = AssistantAgent(
+        planner=Planner(llm_client=FailIfCalledClient()),
+        executor=type(
+            "RecordingExecutor",
+            (),
+            {
+                "execute": lambda self, capability, arguments: calls.append(
+                    (capability, arguments)
+                )
+            },
+        )(),
+        memory=build_memory(tmp_path),
+        capability_registry=registry,
+        capability_provisioning_service=service,
+    )
+
+    response = agent.prepare_provisioned_retry(enabled.model_dump())
+
+    assert response["status"] == "waiting_confirmation"
+    assert response["confirmation"]["capability"] == (
+        "local.windows.env_set_user"
+    )
+    assert response["confirmation"]["arguments"] == {
+        "name": "TESTE",
+        "value": "456",
+    }
+    assert calls == []
 
 
 def test_environment_gap_proposes_windows_user_tool(tmp_path):
@@ -326,6 +448,39 @@ def test_environment_gap_proposes_windows_user_tool(tmp_path):
     assert proposal["definition"]["name"] == (
         "local.windows.env_set_user"
     )
+    assert proposal["requested_capability"] != "file.write"
+
+
+def test_environment_variable_intent_never_falls_back_to_file_write(
+    tmp_path,
+):
+    calls = []
+
+    class RecordingExecutor:
+        def execute(self, capability_name, arguments):
+            calls.append((capability_name, arguments))
+            raise AssertionError("capability gap must not execute fallback")
+
+    agent = AssistantAgent(
+        planner=Planner(llm_client=FailIfCalledClient()),
+        executor=RecordingExecutor(),
+        memory=build_memory(tmp_path),
+        capability_registry=build_default_registry(),
+        capability_provisioning_service=build_provisioning_service(tmp_path),
+    )
+
+    response = agent.handle(
+        "configure uma variável de ambiente chamada ARGOS_TESTE_NOVA "
+        "com valor 456"
+    )
+
+    assert response["confirmation"]["arguments"][
+        "requested_capability"
+    ] == "modify_environment_variable"
+    assert response["confirmation"]["arguments"]["definition"]["name"] == (
+        "local.windows.env_set_user"
+    )
+    assert calls == []
 
 
 def test_destructive_shell_gap_does_not_propose_tool(tmp_path):

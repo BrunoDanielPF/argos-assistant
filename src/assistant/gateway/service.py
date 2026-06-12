@@ -114,6 +114,89 @@ class GatewayService:
                 run_id=pending["run_id"],
                 content="confirmation decision",
             )
+            if result.get("status") == "registry_reload_required":
+                reload_payload = result["reload"]
+                self._agents.pop(session_id, None)
+                agent = self._get_or_create_agent_for_session(session_id)
+                agent.record_registry_reload(reload_payload)
+                result = agent.prepare_provisioned_retry(reload_payload)
+                self._repository.save(
+                    session_id,
+                    agent.memory.snapshot(),
+                )
+                if result.get("status") != "waiting_confirmation":
+                    self._write_event(
+                        "registry_reload_failed",
+                        request,
+                        {
+                            "tool_name": reload_payload["tool_name"],
+                            "tool_version": reload_payload["tool_version"],
+                            "error_code": result.get("error_code"),
+                        },
+                    )
+                    return AgentResponse(
+                        session_id=session_id,
+                        run_id=pending["run_id"],
+                        ok=result["ok"],
+                        status="completed",
+                        message=result["message"],
+                        suggestions=result.get("suggestions", []),
+                        error_code=result.get("error_code"),
+                    )
+                confirmation = self._persist_confirmation(
+                    request,
+                    result,
+                )
+                self._write_event(
+                    "registry_reloaded",
+                    request,
+                    {
+                        "tool_name": reload_payload["tool_name"],
+                        "tool_version": reload_payload["tool_version"],
+                    },
+                )
+                self._write_event(
+                    "confirmation_required",
+                    request,
+                    {
+                        "capability": confirmation.capability,
+                        "policy": "confirm",
+                        "reason": "provisioned_retry",
+                    },
+                )
+                return AgentResponse(
+                    session_id=session_id,
+                    run_id=pending["run_id"],
+                    ok=result["ok"],
+                    status="waiting_confirmation",
+                    message=result["message"],
+                    suggestions=result.get("suggestions", []),
+                    confirmation=confirmation,
+                    error_code=result.get("error_code"),
+                )
+            if result.get("status") == "waiting_confirmation":
+                confirmation = self._persist_confirmation(
+                    request,
+                    result,
+                )
+                self._write_event(
+                    "confirmation_required",
+                    request,
+                    {
+                        "capability": confirmation.capability,
+                        "policy": "confirm",
+                    },
+                )
+                return AgentResponse(
+                    session_id=session_id,
+                    run_id=pending["run_id"],
+                    ok=result["ok"],
+                    status="waiting_confirmation",
+                    message=result["message"],
+                    suggestions=result.get("suggestions", []),
+                    confirmation=confirmation,
+                    error_code=result.get("error_code"),
+                )
             self._write_event(
                 "confirmation_resolved",
                 request,
@@ -180,11 +263,18 @@ class GatewayService:
                 capability,
                 arguments,
             ),
-            permissions=self._describe_permissions(capability, arguments),
+            permissions=payload.get(
+                "permissions",
+                self._describe_permissions(capability, arguments),
+            ),
             question=(
                 "Criar a tool local em draft para revisao?"
                 if capability == "tool.provision_draft"
-                else f"Autorizar a execucao de {capability}?"
+                else (
+                    "Aprovar, instalar e habilitar esta tool local?"
+                    if capability == "tool.approve_install_enable"
+                    else f"Autorizar a execucao de {capability}?"
+                )
             ),
             dry_run=payload.get("dry_run"),
         )
@@ -206,6 +296,16 @@ class GatewayService:
                 "tool_name": definition.get("name"),
                 "tool_version": definition.get("version"),
             }
+        if capability == "tool.approve_install_enable":
+            definition = arguments.get("definition")
+            definition = (
+                definition if isinstance(definition, dict) else {}
+            )
+            return {
+                "tool_name": definition.get("name"),
+                "tool_version": definition.get("version"),
+                "draft_path": arguments.get("draft_path"),
+            }
         summary = {}
         for key, value in arguments.items():
             if key == "content" and isinstance(value, str):
@@ -224,6 +324,13 @@ class GatewayService:
     ) -> list[str]:
         if capability == "tool.provision_draft":
             return ["create:local_tool_draft", "execute:none"]
+        if capability == "tool.approve_install_enable":
+            return [
+                "approve:local_tool",
+                "install:local_tool",
+                "enable:local_tool",
+                "execute:none",
+            ]
         if capability in {"create_file", "write_file"}:
             return [f"write:{arguments.get('path', 'unknown')}"]
         if capability == "search_files":

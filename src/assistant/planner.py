@@ -371,11 +371,26 @@ class Planner:
             flags=re.IGNORECASE,
         )
         if shell_command:
+            command = shell_command.group(1).strip()
+            root = context.get("current_cwd") or context.get(
+                "default_search_root"
+            )
+            if (
+                " ".join(command.casefold().split()) == "git status"
+                and "local.git.status" in self._capabilities
+                and isinstance(root, str)
+                and root.strip()
+            ):
+                return {
+                    "mode": "action",
+                    "capability": "local.git.status",
+                    "arguments": {"cwd": root},
+                }
             return {
                 "mode": "action",
                 "capability": "shell.run",
                 "arguments": {
-                    "command": shell_command.group(1).strip(),
+                    "command": command,
                 },
             }
 
@@ -417,14 +432,21 @@ class Planner:
             flags=re.IGNORECASE,
         )
         if environment_change_accented:
+            capability = (
+                "local.windows.env_set_user"
+                if "local.windows.env_set_user" in self._capabilities
+                else "modify_environment_variable"
+            )
+            arguments = {
+                "name": environment_change_accented.group(1),
+                "value": environment_change_accented.group(2).strip(),
+            }
+            if capability == "modify_environment_variable":
+                arguments["scope"] = "user"
             return {
                 "mode": "action",
-                "capability": "modify_environment_variable",
-                "arguments": {
-                    "name": environment_change_accented.group(1),
-                    "value": environment_change_accented.group(2).strip(),
-                    "scope": "user",
-                },
+                "capability": capability,
+                "arguments": arguments,
             }
 
         environment_change = re.search(
@@ -434,14 +456,21 @@ class Planner:
             flags=re.IGNORECASE,
         )
         if environment_change:
+            capability = (
+                "local.windows.env_set_user"
+                if "local.windows.env_set_user" in self._capabilities
+                else "modify_environment_variable"
+            )
+            arguments = {
+                "name": environment_change.group(1),
+                "value": environment_change.group(2).strip(),
+            }
+            if capability == "modify_environment_variable":
+                arguments["scope"] = "user"
             return {
                 "mode": "action",
-                "capability": "modify_environment_variable",
-                "arguments": {
-                    "name": environment_change.group(1),
-                    "value": environment_change.group(2).strip(),
-                    "scope": "user",
-                },
+                "capability": capability,
+                "arguments": arguments,
             }
 
         path_change = re.search(
