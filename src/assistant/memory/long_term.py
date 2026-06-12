@@ -142,8 +142,11 @@ class LongTermMemoryStore:
             "um",
             "uma",
         }
-        return {
+        terms = {
             term
             for term in re.findall(r"[a-zA-Z0-9_À-ÿ:]+", text.lower())
             if len(term) > 2 and term not in stopwords
         }
+        if any(term.endswith("shell") for term in terms):
+            terms.add("shell")
+        return terms

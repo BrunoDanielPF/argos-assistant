@@ -131,6 +131,64 @@ def test_cli_prompts_and_resumes_gateway_confirmation(monkeypatch):
     assert decisions == [("confirm-1", True)]
 
 
+def test_cli_renders_guided_dry_run_before_confirmation(monkeypatch):
+    from assistant.runtime.contracts import AgentResponse, ConfirmationRequest
+
+    class FakeGatewayClient:
+        def chat(self, session_id, content, cwd=None):
+            return AgentResponse(
+                session_id=session_id,
+                run_id="run-1",
+                ok=False,
+                status="waiting_confirmation",
+                message="Preciso de confirmacao.",
+                confirmation=ConfirmationRequest(
+                    confirmation_id="confirm-1",
+                    capability="file.move_many",
+                    arguments_summary={"pattern": "*.txt"},
+                    permissions=["write:C:\\workspace\\backup"],
+                    question="Autorizar?",
+                    dry_run={
+                        "action": "file.move_many",
+                        "resources_affected": [
+                            "C:\\workspace",
+                            "C:\\workspace\\backup",
+                        ],
+                        "risk": "high",
+                        "permissions_required": [
+                            "write:C:\\workspace",
+                            "write:C:\\workspace\\backup",
+                        ],
+                        "requires_confirmation": True,
+                        "expected_result": (
+                            "Os arquivos .txt seriam movidos para backup."
+                        ),
+                        "can_execute": True,
+                    },
+                ),
+            )
+
+        def confirm(self, confirmation_id, approved):
+            return AgentResponse(
+                session_id="default",
+                run_id="run-1",
+                ok=False,
+                message="Cancelado",
+            )
+
+    monkeypatch.setattr("assistant.cli.build_gateway_client", lambda: FakeGatewayClient())
+    monkeypatch.setattr("builtins.input", lambda prompt: "nao")
+
+    result = CliRunner().invoke(app, ["chat", "mova os txt"])
+
+    assert result.exit_code == 0
+    assert "Impacto previsto" in result.stdout
+    assert "Recursos afetados" in result.stdout
+    assert "Executar com confirmacao" in result.stdout
+    assert "Revisar detalhes" in result.stdout
+    assert "Cancelar" in result.stdout
+
+
 def test_interactive_explains_keyboard_interruption(monkeypatch):
     monkeypatch.setattr(
         "assistant.cli.typer.prompt",
@@ -228,10 +286,73 @@ def test_cli_without_subcommand_enters_interactive_mode(monkeypatch):
     result = runner.invoke(app, ["--direct"], input="oi\nexit\n")
 
     assert result.exit_code == 0
-    assert "Interactive mode. Type 'exit' to quit." in result.stdout
+    assert "Digite /help para explorar comandos" in result.stdout
     assert "argos:" in result.stdout
     assert "Handled oi" in result.stdout
     assert prompts == ["oi"]
+
+
+def test_cli_interactive_renders_structured_header_and_help(monkeypatch):
+    class FakeMemory:
+        def snapshot(self) -> dict:
+            return {"context": {"current_cwd": "C:\\workspace"}}
+
+    class FakeAgent:
+        memory = FakeMemory()
+
+        def handle(self, user_input: str) -> dict:
+            raise AssertionError("agent should not handle /help")
+
+    monkeypatch.setattr("assistant.cli.build_agent", lambda confirmer=None: FakeAgent())
+
+    result = CliRunner().invoke(
+        app,
+        ["interactive", "--direct"],
+        input="/help\nexit\n",
+    )
+
+    assert result.exit_code == 0
+    assert "ARGOS" in result.stdout
+    assert "C:\\workspace" in result.stdout
+    assert "Comandos" in result.stdout
+    assert "/open" in result.stdout
+    assert "Exemplos de pedidos" in result.stdout
+
+
+def test_cli_chat_renders_markdown_response(monkeypatch):
+    class FakeAgent:
+        def handle(self, user_input: str) -> dict:
+            return {
+                "ok": True,
+                "message": "## Arquivos\n\n- `README.md`",
+                "suggestions": [],
+            }
+
+    monkeypatch.setattr("assistant.cli.build_agent", lambda confirmer=None: FakeAgent())
+
+    result = CliRunner().invoke(app, ["chat", "--direct", "liste arquivos"])
+
+    assert result.exit_code == 0
+    assert "Resposta" in result.stdout
+    assert "Arquivos" in result.stdout
+    assert "README.md" in result.stdout
+
+
+def test_cli_accepts_no_color_root_option(monkeypatch):
+    class FakeAgent:
+        def handle(self, user_input: str) -> dict:
+            return {"ok": True, "message": "Tudo certo", "suggestions": []}
+
+    monkeypatch.setattr("assistant.cli.build_agent", lambda confirmer=None: FakeAgent())
+
+    result = CliRunner().invoke(
+        app,
+        ["--no-color", "chat", "--direct", "oi"],
+    )
+
+    assert result.exit_code == 0
+    assert "Tudo certo" in result.stdout
+    assert "\x1b[" not in result.stdout
 
 
 def test_cli_interactive_updates_cwd(monkeypatch):

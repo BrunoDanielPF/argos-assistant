@@ -8,6 +8,7 @@ from assistant.memory.models import (
     MemoryType,
 )
 from assistant.memory.session import SessionMemory
+from assistant.memory.long_term import LongTermMemoryStore
 from assistant.planner import Planner
 from assistant.recovery.engine import RecoveryEngine
 
@@ -41,8 +42,8 @@ def test_agent_blocks_forbidden_capability():
         def create_plan(self, user_input: str) -> dict:
             return {
                 "mode": "action",
-                "capability": "delete_files",
-                "arguments": {"path": "C:\\temp"},
+                "capability": "does.not.exist",
+                "arguments": {},
             }
 
     class FailIfCalledExecutor:
@@ -57,10 +58,10 @@ def test_agent_blocks_forbidden_capability():
     response = agent.handle("delete files")
 
     assert response["ok"] is False
-    assert "Blocked capability" in response["message"]
+    assert response["error_code"] == "unsupported_capability"
 
 
-def test_agent_requires_confirmation_before_sensitive_action():
+def test_agent_allows_read_only_search_without_confirmation():
     class FakeConfirmPlanner:
         def create_plan(self, user_input: str) -> dict:
             return {
@@ -75,21 +76,29 @@ def test_agent_requires_confirmation_before_sensitive_action():
         confirmations.append((capability_name, arguments))
         return False
 
-    class FailIfCalledExecutor:
+    class SearchExecutor:
         def execute(self, capability_name: str, args: dict):
-            raise AssertionError("executor should not run when confirmation is denied")
+            return type(
+                "Result",
+                (),
+                {
+                    "ok": True,
+                    "message": "Found",
+                    "data": {"matches": [], "all_count": 0},
+                    "error_code": None,
+                },
+            )()
 
     agent = AssistantAgent(
         planner=FakeConfirmPlanner(),
-        executor=FailIfCalledExecutor(),
+        executor=SearchExecutor(),
         confirmer=fake_confirm,
     )
 
     response = agent.handle("search notes")
 
-    assert response["ok"] is False
-    assert response["message"] == "Action cancelled by user"
-    assert confirmations == [("search_files", {"root": "C:\\temp", "pattern": "notes.txt"})]
+    assert response["ok"] is True
+    assert confirmations == []
 
 
 def test_agent_without_confirmer_requests_confirmation_instead_of_cancelling():
@@ -116,11 +125,11 @@ def test_agent_without_confirmer_requests_confirmation_instead_of_cancelling():
     response = agent.handle("crie o arquivo")
 
     assert response["status"] == "waiting_confirmation"
-    assert response["confirmation"]["capability"] == "create_file"
+    assert response["confirmation"]["capability"] == "file.create"
     assert response["confirmation"]["arguments"]["path"].endswith("receita.md")
     assert "cancel" not in response["message"].lower()
     audit = agent.memory.snapshot()["audit"][-1]
-    assert audit["capability"] == "create_file"
+    assert audit["capability"] == "file.create"
     assert audit["policy"] == "confirm"
     assert audit["decision"] == "pending"
 
@@ -147,7 +156,7 @@ def test_agent_executes_action_after_remote_confirmation():
 
     assert response["ok"] is True
     assert response["status"] == "completed"
-    assert executed[0][0] == "create_file"
+    assert executed[0][0] == "file.create"
 
 
 class FakeFailedExecutor:
@@ -317,6 +326,59 @@ def test_agent_retrieves_and_observes_with_memory_engine():
     )
 
 
+def test_agent_recovers_saved_shell_preference_before_planner(tmp_path):
+    class ContextPlanner:
+        def __init__(self) -> None:
+            self.context = None
+
+        def create_plan(self, user_input: str, context: dict | None = None) -> dict:
+            self.context = context
+            return {"mode": "answer", "content": "PowerShell"}
+
+    store = LongTermMemoryStore(tmp_path)
+    store.remember("Prefiro PowerShell para comandos Windows.")
+    planner = ContextPlanner()
+    agent = AssistantAgent(
+        planner=planner,
+        executor=FakeExecutor(),
+        long_term_memory=store,
+    )
+
+    response = agent.handle("qual shell eu prefiro para comandos Windows?")
+
+    assert response["ok"] is True
+    assert planner.context["long_term_memories"][0]["learning"] == (
+        "Prefiro PowerShell para comandos Windows."
+    )
+
+
+def test_agent_blocks_destructive_shell_before_confirmation():
+    confirmations = []
+
+    class ShellPlanner:
+        def create_plan(self, user_input: str, context=None) -> dict:
+            return {
+                "mode": "action",
+                "capability": "shell.run",
+                "arguments": {"command": "del /s /q *"},
+            }
+
+    agent = AssistantAgent(
+        planner=ShellPlanner(),
+        executor=FakeExecutor(),
+        confirmer=lambda capability, arguments: confirmations.append(
+            (capability, arguments)
+        )
+        or True,
+    )
+
+    response = agent.handle("rode o comando del /s /q *")
+
+    assert response["ok"] is False
+    assert response["error_code"] == "policy_blocked"
+    assert confirmations == []
+
+
 def test_agent_injects_previous_conversation_into_planner_context():
     class ContextPlanner:
         def __init__(self) -> None:
@@ -379,10 +441,10 @@ def test_agent_executes_confirmed_multi_step_plan():
     response = agent.handle("crie arquivo")
 
     assert response["ok"] is True
-    assert "Executed create_file" in response["message"]
-    assert "Executed open_file" in response["message"]
-    assert [item[0] for item in executed] == ["create_file", "open_file"]
-    assert [item[0] for item in confirmations] == ["create_file"]
+    assert "Executed file.create" in response["message"]
+    assert "Executed file.open" in response["message"]
+    assert [item[0] for item in executed] == ["file.create", "file.open"]
+    assert [item[0] for item in confirmations] == ["file.create"]
 
 
 def test_agent_suggests_file_creation_when_open_file_fails_missing():
@@ -525,11 +587,11 @@ def test_agent_resolves_file_before_confirmation_and_completes_natural_clarifica
     assert target.read_text(encoding="utf-8") == "hello world\nola mundo bruno"
     assert confirmations == [
         (
-            "write_file",
+            "file.write",
             {
                 "path": str(target.resolve()),
                 "content": "ola mundo bruno",
-                "write_mode": "append",
+                "mode": "append",
             },
         )
     ]
@@ -571,7 +633,7 @@ def test_agent_asks_user_to_choose_when_file_resolution_is_ambiguous(tmp_path):
     assert len(pending["options"]) == 3
 
 
-def test_agent_converts_write_to_create_for_explicit_new_file(tmp_path):
+def test_agent_does_not_convert_write_to_create_for_missing_file(tmp_path):
     target = tmp_path / "receita.md"
     confirmations = []
 
@@ -598,12 +660,13 @@ def test_agent_converts_write_to_create_for_explicit_new_file(tmp_path):
 
     response = agent.handle("salve a receita neste arquivo")
 
-    assert response["ok"] is True
-    assert target.read_text(encoding="utf-8") == "# Receita"
-    assert confirmations[0][0] == "create_file"
+    assert response["ok"] is False
+    assert response["error_code"] == "not_found"
+    assert not target.exists()
+    assert confirmations[0][0] == "file.write"
 
 
-def test_agent_converts_write_without_mode_to_create_for_explicit_new_file(tmp_path):
+def test_agent_rejects_write_without_mode_for_missing_file(tmp_path):
     target = tmp_path / "receita.md"
     confirmations = []
 
@@ -629,9 +692,10 @@ def test_agent_converts_write_without_mode_to_create_for_explicit_new_file(tmp_p
 
     response = agent.handle("salve a receita neste arquivo")
 
-    assert response["ok"] is True
-    assert target.read_text(encoding="utf-8") == "# Receita"
-    assert confirmations[0][0] == "create_file"
+    assert response["ok"] is False
+    assert response["error_code"] == "invalid_schema"
+    assert not target.exists()
+    assert confirmations == []
 
 
 def test_agent_returns_dry_run_for_sensitive_confirmation(tmp_path):
@@ -654,7 +718,7 @@ def test_agent_returns_dry_run_for_sensitive_confirmation(tmp_path):
     response = agent.handle("crie o arquivo")
 
     assert response["status"] == "waiting_confirmation"
-    assert response["confirmation"]["dry_run"]["action"] == "create_file"
+    assert response["confirmation"]["dry_run"]["action"] == "file.create"
     assert response["confirmation"]["dry_run"]["resources_affected"] == [
         str(target)
     ]
@@ -666,8 +730,8 @@ def test_agent_explains_policy_block_without_executing():
         def create_plan(self, user_input: str) -> dict:
             return {
                 "mode": "action",
-                "capability": "delete_files",
-                "arguments": {"path": ".", "pattern": "*.tmp"},
+                "capability": "file.delete_one",
+                "arguments": {"path": "C:\\temp", "recursive": True},
             }
 
     class FailIfCalledExecutor:
@@ -685,8 +749,7 @@ def test_agent_explains_policy_block_without_executing():
     )
 
     assert response["ok"] is False
-    assert "bloqueada" in response["message"].lower()
-    assert "alternativa" in response["message"].lower()
+    assert response["error_code"] == "policy_blocked"
 
 
 def test_agent_retries_tool_timeout_only_once():
@@ -954,10 +1017,10 @@ def test_agent_resolves_pending_path_filename_without_calling_planner(tmp_path):
     assert response["ok"] is True
     assert executed == [
         (
-            "write_file",
+            "file.write",
             {
                 "content": "hello",
-                "write_mode": "replace",
+                "mode": "overwrite",
                 "path": str(target.resolve()),
             },
         )
@@ -1033,7 +1096,7 @@ def test_agent_reclassifies_file_creation_instead_of_using_it_as_pending_path(
     response = agent.handle("crie um arquivo chamado teste.txt")
 
     assert response["status"] == "waiting_confirmation"
-    assert response["confirmation"]["capability"] == "create_file"
+    assert response["confirmation"]["capability"] == "file.create"
     assert response["confirmation"]["arguments"]["path"] == str(
         tmp_path / "teste.txt"
     )

@@ -131,3 +131,43 @@ def test_cli_memory_command_handles_empty_memory(monkeypatch, tmp_path):
 
     assert result.exit_code == 0
     assert "No persistent memories found" in result.stdout
+
+
+def test_cli_memo_is_memory_alias_and_never_reaches_agent(monkeypatch, tmp_path):
+    monkeypatch.setenv("ARGOS_MEMORY_DIR", str(tmp_path))
+    handled = []
+
+    class FakeAgent:
+        memory = None
+
+        def handle(self, user_input: str) -> dict:
+            handled.append(user_input)
+            return {"ok": True, "message": user_input, "suggestions": []}
+
+    monkeypatch.setattr("assistant.cli.build_agent", lambda confirmer=None: FakeAgent())
+
+    result = CliRunner().invoke(app, ["interactive"], input="/memo\nexit\n")
+
+    assert result.exit_code == 0
+    assert handled == []
+    assert "No persistent memories found" in result.stdout
+
+
+def test_unknown_slash_command_is_not_sent_to_agent(monkeypatch, tmp_path):
+    monkeypatch.setenv("ARGOS_MEMORY_DIR", str(tmp_path))
+    handled = []
+
+    class FakeAgent:
+        memory = None
+
+        def handle(self, user_input: str) -> dict:
+            handled.append(user_input)
+            return {"ok": True, "message": user_input, "suggestions": []}
+
+    monkeypatch.setattr("assistant.cli.build_agent", lambda confirmer=None: FakeAgent())
+
+    result = CliRunner().invoke(app, ["interactive"], input="/memori\nexit\n")
+
+    assert result.exit_code == 0
+    assert handled == []
+    assert "/memory" in result.stdout

@@ -10,6 +10,8 @@ from rich.console import Console
 import yaml
 
 from assistant.agent import AssistantAgent
+from assistant.cli_prompt import ArgosPrompt
+from assistant.cli_ui import ArgosUI
 from assistant.config import AppConfig
 from assistant.workflows.engine import (
     AmbiguousWorkflowId,
@@ -163,10 +165,7 @@ def confirm_action(capability_name: str, arguments: dict) -> bool:
 
 
 def render_result(result: dict) -> None:
-    status = "OK" if result["ok"] else "ERROR"
-    console.print(f"[{status}] {result['message']}")
-    for suggestion in result["suggestions"]:
-        console.print(f"- {suggestion['text']}")
+    ArgosUI(console).render_result(result)
 
 
 def get_session_memory(agent):
@@ -331,15 +330,23 @@ def resolve_gateway_confirmation(client: GatewayClient, response):
         for permission in confirmation.permissions:
             console.print(f"- {permission}")
     if confirmation.dry_run:
-        console.print("Dry-run:")
+        dry_run = confirmation.dry_run
+        console.print("Impacto previsto:")
         console.print(
-            json.dumps(
-                confirmation.dry_run,
-                indent=2,
-                ensure_ascii=False,
-            ),
-            markup=False,
+            dry_run.get(
+                "expected_result",
+                "A acao alteraria os recursos informados.",
+            )
         )
+        resources = dry_run.get("resources_affected") or []
+        if resources:
+            console.print("Recursos afetados:")
+            for resource in resources:
+                console.print(f"- {resource}")
+        console.print("Opcoes:")
+        console.print("- Executar com confirmacao")
+        console.print("- Revisar detalhes")
+        console.print("- Cancelar")
     console.print(confirmation.question)
     try:
         answer = builtins.input("Executar esta acao? [s/N]: ").strip().lower()
@@ -796,13 +803,33 @@ def jobs_cancel(job_id: str) -> None:
 def run_interactive_session(
     agent: AssistantAgent,
     memory_store: LongTermMemoryStore | None = None,
+    *,
+    session_id: str = "default",
+    mode: str = "direct",
 ) -> None:
     memory_store = memory_store or LongTermMemoryStore(AppConfig().memory_dir)
-    console.print("Interactive mode. Type 'exit' to quit.")
+    session_memory = get_session_memory(agent)
+    snapshot = (
+        session_memory.snapshot()
+        if session_memory is not None and hasattr(session_memory, "snapshot")
+        else {}
+    )
+    cwd = snapshot.get("context", {}).get("current_cwd", os.getcwd())
+    ui = ArgosUI(console)
+    ui.render_session_header(session_id=session_id, mode=mode, cwd=cwd)
+    console.print("Digite /help para explorar comandos. Use exit para sair.", style="dim")
+    prompt_reader = ArgosPrompt(
+        interactive=bool(
+            sys.stdin
+            and sys.stdin.isatty()
+            and console.is_terminal
+        ),
+        fallback_reader=typer.prompt,
+    )
 
     while True:
         try:
-            prompt = typer.prompt(ASSISTANT_PROMPT)
+            prompt = prompt_reader.read()
         except (KeyboardInterrupt, EOFError, typer.Abort):
             console.print(
                 "\nInteracao interrompida pelo terminal. "
@@ -812,6 +839,9 @@ def run_interactive_session(
         if prompt.strip().lower() in {"exit", "quit"}:
             console.print("Bye.")
             break
+        if prompt.strip() == "/help":
+            ui.render_help()
+            continue
         if prompt.startswith("/cwd "):
             new_cwd = prompt[5:].strip()
             session_memory = get_session_memory(agent)
@@ -849,8 +879,16 @@ def run_interactive_session(
             for item in snapshot.get("history", []):
                 console.print(f"{item['role']}: {item['content']}")
             continue
-        if prompt.strip() == "/memory":
+        if prompt.strip() in {"/memory", "/memo"}:
             render_persistent_memories(memory_store)
+            continue
+        if prompt.lstrip().startswith("/"):
+            command = prompt.strip().split(maxsplit=1)[0]
+            suggestion = "/memory" if command.startswith("/mem") else "/help"
+            console.print(
+                f"Comando desconhecido: {command}. "
+                f"Use {suggestion} ou /help."
+            )
             continue
         learning = extract_memory_learning(prompt)
         if learning:
@@ -867,15 +905,21 @@ def main(
     ctx: typer.Context,
     direct: bool = typer.Option(False, "--direct"),
     session: str = typer.Option("default", "--session"),
+    no_color: bool = typer.Option(False, "--no-color"),
 ) -> None:
     """CLI entry point."""
+    console.no_color = no_color
     if ctx.invoked_subcommand is None:
         if direct:
             agent = build_agent(confirmer=confirm_action)
         else:
             agent = build_gateway_agent(session)
         try:
-            run_interactive_session(agent)
+            run_interactive_session(
+                agent,
+                session_id=session,
+                mode="direct" if direct else "gateway",
+            )
         except GatewayError as exc:
             render_gateway_error(exc)
             raise typer.Exit(code=1) from exc
@@ -916,7 +960,11 @@ def interactive(
     else:
         agent = build_gateway_agent(session)
     try:
-        run_interactive_session(agent)
+        run_interactive_session(
+            agent,
+            session_id=session,
+            mode="direct" if direct else "gateway",
+        )
     except GatewayError as exc:
         render_gateway_error(exc)
         raise typer.Exit(code=1) from exc

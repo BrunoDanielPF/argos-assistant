@@ -62,6 +62,61 @@ class RecoveryPlanner:
                     "Use uma alternativa de leitura, listagem ou selecao explicita."
                 ),
             )
+        if event.failure_type == FailureType.NO_RESULTS:
+            return RecoveryPlan(
+                failure_type=event.failure_type,
+                strategy=RecoveryStrategy.FALLBACK_TO_PARTIAL_ANSWER,
+                risk=RecoveryRisk.LOW,
+                requires_confirmation=False,
+                user_message=(
+                    "A busca foi concluida sem alterar nada, mas nenhum "
+                    "resultado correspondeu aos filtros informados."
+                ),
+            )
+        if event.failure_type == FailureType.UNSUPPORTED_CAPABILITY:
+            return RecoveryPlan(
+                failure_type=event.failure_type,
+                strategy=RecoveryStrategy.SUGGEST_SAFE_ALTERNATIVE,
+                risk=RecoveryRisk.LOW,
+                requires_confirmation=False,
+                user_message=(
+                    f"O Argos ainda nao oferece suporte a {event.operation}. "
+                    "Use uma alternativa suportada ou execute a operacao "
+                    "manualmente fora do Argos."
+                ),
+            )
+        if event.failure_type == FailureType.INVALID_SCHEMA:
+            return RecoveryPlan(
+                failure_type=event.failure_type,
+                strategy=RecoveryStrategy.REBUILD_CONTEXT,
+                risk=RecoveryRisk.LOW,
+                requires_confirmation=False,
+                user_message=(
+                    "Os argumentos do plano sao invalidos. O Argos pode "
+                    "propor um plano corrigido, que sera validado novamente "
+                    "antes de qualquer confirmacao."
+                ),
+            )
+        if event.failure_type == FailureType.WRONG_INTENT:
+            decision = self._policy.decide_action(
+                event.operation,
+                arguments or {},
+            )
+            return RecoveryPlan(
+                failure_type=event.failure_type,
+                strategy=(
+                    RecoveryStrategy.DRY_RUN_THEN_CONFIRM
+                    if decision.requires_confirmation
+                    else RecoveryStrategy.REBUILD_CONTEXT
+                ),
+                risk=decision.risk,
+                requires_confirmation=decision.requires_confirmation,
+                user_message=(
+                    "O intent selecionado nao corresponde ao pedido. "
+                    "O Argos deve replanejar e exigir nova confirmacao "
+                    "se o plano corrigido puder alterar recursos."
+                ),
+            )
         if event.failure_type == FailureType.CONTEXT_AMBIGUITY:
             return RecoveryPlan(
                 failure_type=event.failure_type,

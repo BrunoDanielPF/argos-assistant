@@ -2,8 +2,13 @@ from collections.abc import Callable
 import inspect
 from pathlib import Path
 
+from assistant.capabilities.registry import (
+    CapabilityRegistry,
+    build_default_registry,
+)
 from assistant.execution.policy import decide_policy
 from assistant.files.resolver import FileResolver
+from assistant.files.path_resolver import PathResolver
 from assistant.intent.pending_resolver import (
     HELP_RESPONSE,
     PendingClarificationResolver,
@@ -14,6 +19,7 @@ from assistant.memory.session import SessionMemory
 from assistant.models import AuditEvent
 from assistant.recovery.models import RecoveryStrategy
 from assistant.suggestions import build_suggestions
+from assistant.workflows.policies import is_destructive_shell_command
 
 
 class AssistantAgent:
@@ -30,18 +36,27 @@ class AssistantAgent:
         file_resolver: FileResolver | None = None,
         pending_resolver: PendingClarificationResolver | None = None,
         recovery_engine=None,
+        capability_registry: CapabilityRegistry | None = None,
+        path_resolver: PathResolver | None = None,
     ) -> None:
         self._planner = planner
         self._executor = executor
         self._memory = memory or SessionMemory()
         self._memory_engine = memory_engine
         self._long_term_memory = long_term_memory
+        has_custom_policy = policy_decider is not None
         self._policy_decider = policy_decider or decide_policy
         self._action_validator = action_validator or (lambda capability, arguments: None)
         self._confirmer = confirmer
         self._file_resolver = file_resolver or FileResolver()
         self._pending_resolver = pending_resolver or PendingClarificationResolver()
         self._recovery_engine = recovery_engine
+        self._capability_registry = (
+            capability_registry
+            if capability_registry is not None
+            else (None if has_custom_policy else build_default_registry())
+        )
+        self._path_resolver = path_resolver or PathResolver()
 
     @property
     def memory(self) -> SessionMemory:
@@ -55,6 +70,7 @@ class AssistantAgent:
         policy: str | None = None,
         decision: str | None = None,
         reason: str | None = None,
+        error_code: str | None = None,
     ) -> dict:
         self._memory.add_assistant_message(message)
         self._memory.add_audit_event(
@@ -69,12 +85,15 @@ class AssistantAgent:
         )
         suggestions = build_suggestions(capability_name, message)
         self._memory.set_suggestions(suggestions)
-        return {
+        response = {
             "ok": ok,
             "status": "completed",
             "message": message,
             "suggestions": [item.model_dump() for item in suggestions],
         }
+        if error_code is not None:
+            response["error_code"] = error_code
+        return response
 
     def _build_confirmation_response(
         self,
@@ -102,11 +121,23 @@ class AssistantAgent:
             "capability": capability_name,
             "arguments": dict(arguments),
         }
-        if self._recovery_engine is not None:
-            confirmation["dry_run"] = self._recovery_engine.preview_action(
+        if (
+            self._recovery_engine is not None
+            and hasattr(self._recovery_engine, "preview_action")
+        ):
+            dry_run = self._recovery_engine.preview_action(
                 capability_name,
                 arguments,
-            ).model_dump(mode="json")
+            )
+            if not dry_run.can_execute:
+                return self._build_response(
+                    ok=False,
+                    message=dry_run.expected_result,
+                    capability_name=capability_name,
+                    reason=dry_run.error_code,
+                    error_code=dry_run.error_code or "policy_blocked",
+                )
+            confirmation["dry_run"] = dry_run.model_dump(mode="json")
         return {
             "ok": False,
             "status": "waiting_confirmation",
@@ -115,8 +146,13 @@ class AssistantAgent:
             "confirmation": confirmation,
         }
 
-    def _execute_action(self, capability_name: str, arguments: dict):
-        policy = self._policy_decider(capability_name)
+    def _execute_action(
+        self,
+        capability_name: str,
+        arguments: dict,
+        policy: str | None = None,
+    ):
+        policy = policy or self._policy_decider(capability_name)
 
         if policy == "blocked":
             if self._recovery_engine is not None:
@@ -174,7 +210,7 @@ class AssistantAgent:
         capability_name: str,
         arguments: dict,
     ):
-        result = self._executor.execute(capability_name, arguments)
+        result = self._call_executor(capability_name, arguments)
         if result.ok or self._recovery_engine is None:
             return result
 
@@ -191,7 +227,7 @@ class AssistantAgent:
             },
         )
         if outcome.plan.strategy == RecoveryStrategy.RETRY_WITH_BACKOFF:
-            retried = self._executor.execute(capability_name, arguments)
+            retried = self._call_executor(capability_name, arguments)
             self._recovery_engine.record_attempt(
                 outcome,
                 attempt=1,
@@ -237,6 +273,24 @@ class AssistantAgent:
             },
         )()
 
+    def _call_executor(self, capability_name: str, arguments: dict):
+        try:
+            return self._executor.execute(capability_name, arguments)
+        except Exception as exc:
+            return type(
+                "Result",
+                (),
+                {
+                    "ok": False,
+                    "message": (
+                        f"Execution failed for {capability_name}: {exc}"
+                    ),
+                    "data": None,
+                    "error_code": "execution_failed",
+                    "retry_safe": False,
+                },
+            )()
+
     def execute_confirmed_action(
         self,
         capability_name: str,
@@ -252,6 +306,26 @@ class AssistantAgent:
                 decision="rejected",
                 reason="user_rejected",
             )
+        context = self._memory.snapshot().get("context", {})
+        if self._capability_registry is not None:
+            prepared, validation_response = self._prepare_registry_action(
+                capability_name,
+                arguments,
+                context,
+            )
+            if validation_response is not None:
+                return validation_response
+            assert prepared is not None
+            capability_name, arguments, policy = prepared
+            if policy == "blocked":
+                return self._build_response(
+                    ok=False,
+                    message=f"Blocked capability: {capability_name}",
+                    capability_name=capability_name,
+                    policy=policy,
+                    reason="policy_blocked",
+                    error_code="policy_blocked",
+                )
         result = self._execute_with_recovery(capability_name, arguments)
         return self._build_response(
             ok=result.ok,
@@ -264,10 +338,11 @@ class AssistantAgent:
             policy="confirm",
             decision="approved",
             reason="user_approved",
+            error_code=getattr(result, "error_code", None),
         )
 
     def _recover_failure_message(self, capability_name: str, arguments: dict, message: str) -> str:
-        if capability_name == "open_file" and message.startswith("File not found:"):
+        if capability_name in {"open_file", "file.open"} and message.startswith("File not found:"):
             path = arguments.get("path")
             if isinstance(path, str) and path.strip():
                 return (
@@ -362,11 +437,204 @@ class AssistantAgent:
         if validation_message is None:
             return None
         return self._build_response(
-            ok=True,
+            ok=False,
             message=validation_message,
             capability_name=capability_name,
             reason="invalid_arguments",
+            error_code="invalid_schema",
         )
+
+    def _prepare_registry_action(
+        self,
+        capability_name: str,
+        arguments: dict,
+        context: dict,
+    ) -> tuple[tuple[str, dict, str] | None, dict | None]:
+        assert self._capability_registry is not None
+        normalized_input = dict(arguments)
+        if "write_mode" in normalized_input and "mode" not in normalized_input:
+            normalized_input["mode"] = normalized_input.pop("write_mode")
+        if normalized_input.get("mode") == "replace":
+            normalized_input["mode"] = "overwrite"
+
+        validation = self._capability_registry.validate(
+            capability_name,
+            normalized_input,
+        )
+        if not validation.ok:
+            return None, self._build_response(
+                ok=False,
+                message=validation.message or "Invalid action.",
+                capability_name=capability_name,
+                reason=validation.error_code,
+                error_code=validation.error_code,
+            )
+
+        assert validation.capability is not None
+        assert validation.arguments is not None
+        canonical = validation.capability.name
+        resolved_arguments = dict(validation.arguments)
+        try:
+            if canonical == "file.write":
+                raw_path = resolved_arguments["path"]
+                roots = [
+                    context[key]
+                    for key in (
+                        "current_cwd",
+                        "default_search_root",
+                        "user_home",
+                    )
+                    if isinstance(context.get(key), str)
+                    and context[key].strip()
+                ]
+                resolution = self._file_resolver.resolve(raw_path, roots)
+                if resolution.status == "resolved":
+                    resolved_arguments["path"] = resolution.matches[0]
+                elif resolution.status == "ambiguous":
+                    if self._recovery_engine is not None:
+                        self._recovery_engine.handle_failure(
+                            source="context",
+                            operation=canonical,
+                            message=f"Ambiguous file context: {raw_path}",
+                            arguments=resolved_arguments,
+                            error_code="context_ambiguity",
+                            metadata={"match_count": len(resolution.matches)},
+                        )
+                    pending = {
+                        "field": "path",
+                        "question": (
+                            f"Encontrei mais de um arquivo parecido com "
+                            f"'{raw_path}'. Qual devo usar?"
+                        ),
+                        "action": {
+                            "capability": canonical,
+                            "arguments": resolved_arguments,
+                        },
+                        "options": [
+                            {"id": match, "label": match}
+                            for match in resolution.matches
+                        ]
+                        + [{"id": "cancel", "label": "cancelar"}],
+                    }
+                    question = self._format_pending_question(pending)
+                    return None, self._build_clarification_response(
+                        question,
+                        pending,
+                    )
+                else:
+                    resolved_arguments["path"] = str(
+                        self._path_resolver.resolve(raw_path, context)
+                    )
+            elif canonical.startswith("file.") and canonical != "file.move_many":
+                resolved_arguments["path"] = str(
+                    self._path_resolver.resolve(
+                        resolved_arguments["path"],
+                        context,
+                    )
+                )
+            elif canonical == "files.search":
+                resolved_arguments["root"] = str(
+                    self._path_resolver.resolve(
+                        resolved_arguments["root"],
+                        context,
+                    )
+                )
+            elif canonical == "file.move_many":
+                resolved_arguments["destination"] = str(
+                    self._path_resolver.resolve(
+                        resolved_arguments["destination"],
+                        context,
+                    )
+                )
+                if resolved_arguments.get("source_root"):
+                    resolved_arguments["source_root"] = str(
+                        self._path_resolver.resolve(
+                            resolved_arguments["source_root"],
+                            context,
+                        )
+                    )
+                resolved_arguments["sources"] = [
+                    str(self._path_resolver.resolve(source, context))
+                    for source in resolved_arguments.get("sources", [])
+                ]
+        except (KeyError, TypeError, ValueError) as exc:
+            return None, self._build_response(
+                ok=False,
+                message=f"Invalid schema for {canonical}: {exc}",
+                capability_name=canonical,
+                reason="invalid_schema",
+                error_code="invalid_schema",
+            )
+
+        if canonical == "file.write" and resolved_arguments.get("mode") is None:
+            target = Path(resolved_arguments["path"])
+            try:
+                is_empty_file = target.is_file() and target.stat().st_size == 0
+            except OSError:
+                is_empty_file = False
+            if is_empty_file:
+                resolved_arguments["mode"] = "overwrite"
+            else:
+                return None, self._build_response(
+                    ok=False,
+                    message=(
+                        "Invalid schema for file.write: mode is required "
+                        "and must be overwrite or append."
+                    ),
+                    capability_name=canonical,
+                    reason="invalid_schema",
+                    error_code="invalid_schema",
+                )
+
+        final_validation = self._capability_registry.validate(
+            canonical,
+            resolved_arguments,
+        )
+        if not final_validation.ok:
+            return None, self._build_response(
+                ok=False,
+                message=final_validation.message or "Invalid action.",
+                capability_name=canonical,
+                reason=final_validation.error_code,
+                error_code=final_validation.error_code,
+            )
+        assert final_validation.arguments is not None
+        policy = decide_policy(
+            canonical,
+            final_validation.arguments,
+            context,
+            registry=self._capability_registry,
+        )
+        if policy == "blocked":
+            message = f"Blocked capability: {canonical}"
+            if self._recovery_engine is not None:
+                outcome = self._recovery_engine.handle_failure(
+                    source="action",
+                    operation=canonical,
+                    message=message,
+                    arguments=final_validation.arguments,
+                    error_code="policy_blocked",
+                )
+                message = outcome.plan.user_message
+            return None, self._build_response(
+                ok=False,
+                message=message,
+                capability_name=canonical,
+                policy=policy,
+                reason="policy_blocked",
+                error_code="policy_blocked",
+            )
+        return (canonical, final_validation.arguments, policy), None
+
+    @staticmethod
+    def _format_pending_question(pending: dict) -> str:
+        lines = [str(pending["question"])]
+        for index, option in enumerate(pending.get("options", []), start=1):
+            lines.append(f"{index}. {option['label']}")
+        lines.append(
+            "Voce pode responder com o numero ou com suas proprias palavras."
+        )
+        return "\n".join(lines)
 
     @staticmethod
     def _inject_runtime_arguments(
@@ -554,18 +822,48 @@ class AssistantAgent:
 
         if plan["mode"] == "action":
             capability_name = plan["capability"]
-            capability_name, planned_arguments = self._normalize_file_creation(
-                capability_name,
-                plan["arguments"],
-            )
-            arguments, clarification_response = self._prepare_action(
-                capability_name,
-                planned_arguments,
-                snapshot_context,
-            )
-            if clarification_response is not None:
-                return clarification_response
-            assert arguments is not None
+            if (
+                capability_name == "shell.run"
+                and is_destructive_shell_command(
+                    plan.get("arguments", {}).get("command")
+                )
+            ):
+                return self._build_response(
+                    ok=False,
+                    message=(
+                        "O comando shell foi bloqueado porque pode apagar "
+                        "arquivos de forma recursiva ou destrutiva."
+                    ),
+                    capability_name=capability_name,
+                    policy="blocked",
+                    decision="blocked",
+                    reason="policy_blocked",
+                    error_code="policy_blocked",
+                )
+            policy = None
+            if self._capability_registry is not None:
+                prepared, validation_response = self._prepare_registry_action(
+                    capability_name,
+                    plan["arguments"],
+                    snapshot_context,
+                )
+                if validation_response is not None:
+                    return validation_response
+                assert prepared is not None
+                capability_name, arguments, policy = prepared
+            else:
+                capability_name, planned_arguments = self._normalize_file_creation(
+                    capability_name,
+                    plan["arguments"],
+                )
+                arguments, clarification_response = self._prepare_action(
+                    capability_name,
+                    planned_arguments,
+                    snapshot_context,
+                )
+                if clarification_response is not None:
+                    return clarification_response
+                assert arguments is not None
             arguments = self._inject_runtime_arguments(
                 capability_name,
                 arguments,
@@ -577,13 +875,17 @@ class AssistantAgent:
             )
             if validation_response is not None:
                 return validation_response
-            result = self._execute_action(capability_name, arguments)
+            result = self._execute_action(
+                capability_name,
+                arguments,
+                policy=policy,
+            )
             if getattr(result, "confirmation_required", False):
                 return self._build_confirmation_response(
                     capability_name,
                     arguments,
                 )
-            if capability_name == "search_files" and result.ok and result.data:
+            if capability_name in {"search_files", "files.search"} and result.ok and result.data:
                 matches = result.data.get("matches")
                 if isinstance(matches, list):
                     self._memory.set_last_search_results(matches)
@@ -591,6 +893,7 @@ class AssistantAgent:
                 ok=result.ok,
                 message=self._recover_failure_message(capability_name, arguments, result.message),
                 capability_name=capability_name,
+                error_code=getattr(result, "error_code", None),
             )
 
         if plan["mode"] == "plan":
@@ -598,18 +901,30 @@ class AssistantAgent:
             last_capability = "plan"
             for step in plan["steps"]:
                 capability_name = step["capability"]
-                capability_name, planned_arguments = self._normalize_file_creation(
-                    capability_name,
-                    step["arguments"],
-                )
-                arguments, clarification_response = self._prepare_action(
-                    capability_name,
-                    planned_arguments,
-                    snapshot_context,
-                )
-                if clarification_response is not None:
-                    return clarification_response
-                assert arguments is not None
+                policy = None
+                if self._capability_registry is not None:
+                    prepared, validation_response = self._prepare_registry_action(
+                        capability_name,
+                        step["arguments"],
+                        snapshot_context,
+                    )
+                    if validation_response is not None:
+                        return validation_response
+                    assert prepared is not None
+                    capability_name, arguments, policy = prepared
+                else:
+                    capability_name, planned_arguments = self._normalize_file_creation(
+                        capability_name,
+                        step["arguments"],
+                    )
+                    arguments, clarification_response = self._prepare_action(
+                        capability_name,
+                        planned_arguments,
+                        snapshot_context,
+                    )
+                    if clarification_response is not None:
+                        return clarification_response
+                    assert arguments is not None
                 arguments = self._inject_runtime_arguments(
                     capability_name,
                     arguments,
@@ -622,7 +937,11 @@ class AssistantAgent:
                 )
                 if validation_response is not None:
                     return validation_response
-                result = self._execute_action(capability_name, arguments)
+                result = self._execute_action(
+                    capability_name,
+                    arguments,
+                    policy=policy,
+                )
                 if getattr(result, "confirmation_required", False):
                     return self._build_confirmation_response(
                         capability_name,
@@ -638,6 +957,7 @@ class AssistantAgent:
                             "\n".join(messages),
                         ),
                         capability_name=capability_name,
+                        error_code=getattr(result, "error_code", None),
                     )
             return self._build_response(
                 ok=True,

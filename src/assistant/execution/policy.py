@@ -1,22 +1,38 @@
-AUTO_EXECUTE = {"open_application", "open_file", "open_url"}
-CONFIRM = {
-    "create_file",
-    "schedule_reminder",
-    "search_files",
-    "run_shell_command",
-    "type_text",
-    "write_file",
-    "modify_path",
-    "modify_environment_variable",
-}
-BLOCKED = {"delete_files", "shutdown_system"}
+from pathlib import Path
+
+from assistant.capabilities.registry import (
+    CapabilityRegistry,
+    build_default_registry,
+)
 
 
-def decide_policy(capability_name: str) -> str:
-    if capability_name in AUTO_EXECUTE:
-        return "allow"
-    if capability_name in CONFIRM:
-        return "confirm"
-    if capability_name in BLOCKED:
+def decide_policy(
+    capability_name: str,
+    arguments: dict | None = None,
+    context: dict | None = None,
+    *,
+    registry: CapabilityRegistry | None = None,
+) -> str:
+    registry = registry or build_default_registry()
+    capability = registry.resolve(capability_name)
+    if capability is None:
         return "blocked"
-    return "blocked"
+
+    arguments = arguments or {}
+    context = context or {}
+    if capability.name == "file.delete_one":
+        if arguments.get("recursive") is True:
+            return "blocked"
+        path = arguments.get("path")
+        current_cwd = context.get("current_cwd")
+        if isinstance(path, str):
+            target = Path(path)
+            if target.exists() and target.is_dir():
+                return "blocked"
+            if isinstance(current_cwd, str):
+                try:
+                    if target.resolve() == Path(current_cwd).resolve():
+                        return "blocked"
+                except OSError:
+                    return "blocked"
+    return capability.policy

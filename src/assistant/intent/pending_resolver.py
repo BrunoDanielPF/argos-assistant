@@ -120,6 +120,8 @@ class PendingClarificationResolver:
             return True
         if any(marker in normalized for marker in self._HELP_MARKERS[3:]):
             return True
+        if "prefir" in normalized:
+            return False
         capability_terms = (
             "habilidade",
             "habilidades",

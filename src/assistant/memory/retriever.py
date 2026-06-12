@@ -94,9 +94,11 @@ class LexicalMemoryRetriever:
             "um",
             "uma",
         }
-        return {
+        terms = {
             term
             for term in re.findall(r"[a-z0-9_:+.-]+", normalized)
             if len(term) > 2 and term not in stopwords
         }
-
+        if any(term.endswith("shell") for term in terms):
+            terms.add("shell")
+        return terms

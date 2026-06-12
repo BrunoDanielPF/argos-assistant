@@ -56,12 +56,12 @@ def test_policy_does_not_retry_tool_without_read_only_proof():
 
 def test_policy_never_auto_executes_destructive_action():
     decision = RecoveryPolicy().decide(
-        failure(FailureType.POLICY_BLOCKED, "delete_files"),
+        failure(FailureType.POLICY_BLOCKED, "file.delete_one"),
         strategy="dry_run_then_confirm",
         attempt=0,
         action={
-            "capability": "delete_files",
-            "arguments": {"path": ".", "pattern": "*.tmp"},
+            "capability": "file.delete_one",
+            "arguments": {"path": ".", "recursive": True},
         },
     )
 
@@ -70,12 +70,11 @@ def test_policy_never_auto_executes_destructive_action():
     assert decision.risk == RecoveryRisk.CRITICAL
 
 
-def test_policy_requires_confirmation_for_path_change():
+def test_policy_rejects_path_change_without_registered_executor():
     decision = RecoveryPolicy().decide_action(
         "modify_path",
         {"value": "C:\\tools"},
     )
 
-    assert decision.allowed is True
-    assert decision.requires_confirmation is True
-    assert decision.risk == RecoveryRisk.HIGH
+    assert decision.allowed is False
+    assert decision.requires_confirmation is False

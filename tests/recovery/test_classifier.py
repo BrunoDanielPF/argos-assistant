@@ -44,3 +44,24 @@ def test_classifier_redacts_secret_from_failure_message():
 
     assert "secret-value" not in event.message
     assert "[REDACTED]" in event.message
+
+
+def test_classifier_uses_runtime_contract_failure_types():
+    classifier = FailureClassifier()
+    expected = {
+        "unsupported_capability": FailureType.UNSUPPORTED_CAPABILITY,
+        "invalid_schema": FailureType.INVALID_SCHEMA,
+        "wrong_intent": FailureType.WRONG_INTENT,
+        "policy_blocked": FailureType.POLICY_BLOCKED,
+        "no_results": FailureType.NO_RESULTS,
+        "execution_failed": FailureType.EXECUTION_FAILED,
+    }
+
+    for error_code, failure_type in expected.items():
+        event = classifier.classify(
+            source="action",
+            operation="example.action",
+            message=error_code,
+            error_code=error_code,
+        )
+        assert event.failure_type is failure_type

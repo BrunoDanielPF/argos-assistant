@@ -133,7 +133,13 @@ def test_executor_reports_search_files_no_matches(tmp_path):
         {"root": str(tmp_path), "pattern": "missing.txt"},
     )
 
-    assert result.ok is False
+    assert result.ok is True
+    assert result.error_code == "no_results"
+    assert result.data == {
+        "matches": [],
+        "all_count": 0,
+        "status": "no_results",
+    }
     assert "No files matched" in result.message
 
 
