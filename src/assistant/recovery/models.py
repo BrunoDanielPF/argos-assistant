@@ -11,6 +11,11 @@ class StrictModel(BaseModel):
 
 
 class FailureType(StrEnum):
+    UNSUPPORTED_CAPABILITY = "unsupported_capability"
+    INVALID_SCHEMA = "invalid_schema"
+    WRONG_INTENT = "wrong_intent"
+    NO_RESULTS = "no_results"
+    EXECUTION_FAILED = "execution_failed"
     TIMEOUT = "timeout"
     INVALID_ARGUMENTS = "invalid_arguments"
     PERMISSION_DENIED = "permission_denied"
@@ -75,6 +80,7 @@ class DryRunPlan(StrictModel):
     requires_confirmation: bool
     expected_result: str
     can_execute: bool = True
+    error_code: str | None = None
 
 
 class RecoveryOutcome(StrictModel):

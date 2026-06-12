@@ -84,6 +84,7 @@ class GatewayService:
                 message=result["message"],
                 suggestions=result.get("suggestions", []),
                 confirmation=confirmation,
+                error_code=result.get("error_code"),
             )
 
     def resolve_confirmation(
@@ -131,6 +132,7 @@ class GatewayService:
                 status="completed",
                 message=result["message"],
                 suggestions=result.get("suggestions", []),
+                error_code=result.get("error_code"),
             )
 
     def _get_session_lock(self, session_id: str) -> RLock:

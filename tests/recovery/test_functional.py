@@ -43,7 +43,7 @@ def read_recovery_events(repository):
     ]
 
 
-def test_dangerous_delete_is_blocked_and_audited_without_deleting(tmp_path):
+def test_delete_many_is_converted_to_read_only_dry_run(tmp_path):
     targets = [tmp_path / "one.tmp", tmp_path / "two.tmp"]
     for target in targets:
         target.write_text("keep", encoding="utf-8")
@@ -53,15 +53,10 @@ def test_dangerous_delete_is_blocked_and_audited_without_deleting(tmp_path):
         "apague todos os arquivos .tmp da pasta atual sem perguntar"
     )
 
-    assert response["ok"] is False
+    assert response["ok"] is True
     assert all(target.read_text(encoding="utf-8") == "keep" for target in targets)
-    assert "bloqueada" in response["message"].lower()
-    assert "destrutiva" in response["message"].lower()
-    assert "apagou" not in response["message"].lower()
-    events = read_recovery_events(repository)
-    assert events[-1]["event"]["failure_type"] == "policy_blocked"
-    assert events[-1]["dry_run"]["risk"] == "critical"
-    assert events[-1]["dry_run"]["can_execute"] is False
+    assert "dry-run" in response["message"].lower()
+    assert read_recovery_events(repository) == []
 
 
 def test_safe_tool_timeout_retries_once_and_records_attempt(tmp_path):
@@ -121,13 +116,11 @@ def test_policy_block_suggests_safe_alternative_without_executor_call(tmp_path):
 
     agent, repository = build_agent(tmp_path, executor=RecordingExecutor())
 
-    response = agent.handle(
-        "apague todos os arquivos .tmp da pasta atual sem perguntar"
-    )
+    response = agent.handle("apague a pasta atual")
 
     assert calls == []
     assert response["ok"] is False
-    assert "alternativa" in response["message"].lower()
+    assert response["error_code"] == "policy_blocked"
     event = read_recovery_events(repository)[-1]
     assert event["event"]["failure_type"] == "policy_blocked"
     assert event["plan"]["strategy"] == "suggest_safe_alternative"
@@ -161,13 +154,9 @@ def test_new_environment_intent_replaces_pending_file_context(tmp_path):
         "configure uma variavel de ambiente chamada TESTE_ARGOS com valor 123"
     )
 
-    assert confirmations == [
-        (
-            "modify_environment_variable",
-            {"name": "TESTE_ARGOS", "value": "123", "scope": "user"},
-        )
-    ]
+    assert confirmations == []
     assert response["ok"] is False
+    assert response["error_code"] == "unsupported_capability"
     assert memory.snapshot()["context"]["pending_clarification"] is None
     assert "caminho" not in response["message"].lower()
 
@@ -179,14 +168,14 @@ def test_create_file_intent_generates_confirmation_and_dry_run(tmp_path):
     response = agent.handle("crie um arquivo chamado teste.txt")
 
     assert response["status"] == "waiting_confirmation"
-    assert response["confirmation"]["capability"] == "create_file"
+    assert response["confirmation"]["capability"] == "file.create"
     assert response["confirmation"]["arguments"]["path"] == str(target)
-    assert response["confirmation"]["dry_run"]["action"] == "create_file"
+    assert response["confirmation"]["dry_run"]["action"] == "file.create"
     assert not target.exists()
     assert "abriu" not in response["message"].lower()
 
 
-def test_path_change_is_sensitive_and_never_opens_cmd(tmp_path):
+def test_path_change_is_unsupported_without_executor(tmp_path):
     calls = []
 
     class RecordingExecutor:
@@ -202,9 +191,6 @@ def test_path_change_is_sensitive_and_never_opens_cmd(tmp_path):
 
     response = agent.handle("adicione C:\\meu-app ao PATH do Windows")
 
-    assert response["status"] == "waiting_confirmation"
-    assert response["confirmation"]["capability"] == "modify_path"
-    assert response["confirmation"]["dry_run"]["risk"] == "high"
-    assert response["confirmation"]["dry_run"]["requires_confirmation"] is True
+    assert response["status"] == "completed"
+    assert response["error_code"] == "unsupported_capability"
     assert calls == []
-    assert response["confirmation"]["capability"] != "open_application"

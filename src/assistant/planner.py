@@ -259,6 +259,157 @@ class Planner:
         lowered_input = normalized_input.lower()
         context = context or {}
 
+        if re.fullmatch(
+            r"(?:onde|em que (?:pasta|diret[oÃ³]rio)) "
+            r"(?:estou|estamos)(?: trabalhando)?(?: agora)?\??",
+            normalized_input,
+            flags=re.IGNORECASE,
+        ):
+            current_cwd = context.get("current_cwd")
+            if isinstance(current_cwd, str) and current_cwd.strip():
+                return {
+                    "mode": "answer",
+                    "content": f"Voce esta trabalhando em {current_cwd}.",
+                }
+
+        create_directory = re.search(
+            r"(?:crie|criar)\s+uma\s+pasta\s+(?:chamada\s+)?([A-Za-z0-9_.-]+)",
+            normalized_input,
+            flags=re.IGNORECASE,
+        )
+        if create_directory:
+            return {
+                "mode": "action",
+                "capability": "file.create_directory",
+                "arguments": {"path": create_directory.group(1)},
+            }
+
+        read_file = re.fullmatch(
+            r"(?:leia|ler)\s+(?:o\s+)?arquivo\s+(.+)",
+            normalized_input,
+            flags=re.IGNORECASE,
+        )
+        if read_file:
+            return {
+                "mode": "action",
+                "capability": "file.read",
+                "arguments": {
+                    "path": read_file.group(1).strip().strip('"'),
+                },
+            }
+
+        open_file_pt = re.fullmatch(
+            r"(?:abra|abrir)\s+(?:o\s+)?arquivo\s+(.+)",
+            normalized_input,
+            flags=re.IGNORECASE,
+        )
+        if open_file_pt:
+            return {
+                "mode": "action",
+                "capability": "file.open",
+                "arguments": {
+                    "path": open_file_pt.group(1).strip().strip('"'),
+                },
+            }
+
+        search_current = re.fullmatch(
+            r"(?:buscar|busque|procure)\s+arquivos?\s+"
+            r"(\*?\.[A-Za-z0-9]+|[A-Za-z0-9]+)\s+"
+            r"(?:nesta pasta|nessa pasta|aqui|na pasta atual)",
+            normalized_input,
+            flags=re.IGNORECASE,
+        )
+        if search_current:
+            suffix = search_current.group(1)
+            pattern = suffix if suffix.startswith("*.") else f"*.{suffix.lstrip('.')}"
+            root = context.get("current_cwd") or context.get("default_search_root")
+            if isinstance(root, str) and root.strip():
+                return {
+                    "mode": "action",
+                    "capability": "files.search",
+                    "arguments": {
+                        "root": root,
+                        "pattern": pattern,
+                        "max_results": 5,
+                    },
+                }
+
+        delete_dry_run = re.search(
+            r"(?:dry[- ]run|simule|simular).+?"
+            r"(?:apagar|apague|excluir|delete).+?"
+            r"(\*\.[a-zA-Z0-9]+|\.[a-zA-Z0-9]+)",
+            normalized_input,
+            flags=re.IGNORECASE,
+        )
+        if delete_dry_run:
+            pattern = delete_dry_run.group(1)
+            if pattern.startswith("."):
+                pattern = f"*{pattern}"
+            root = context.get("current_cwd") or context.get("default_search_root") or "."
+            return {
+                "mode": "action",
+                "capability": "file.delete_dry_run",
+                "arguments": {"path": str(root), "pattern": pattern},
+            }
+
+        if re.search(
+            r"(?:apague|apagar|exclua|excluir)\s+(?:a\s+)?"
+            r"(?:pasta|diret[oó]rio)\s+atual",
+            normalized_input,
+            flags=re.IGNORECASE,
+        ):
+            root = context.get("current_cwd") or "."
+            return {
+                "mode": "action",
+                "capability": "file.delete_one",
+                "arguments": {"path": str(root), "recursive": True},
+            }
+
+        shell_command = re.fullmatch(
+            r"(?:rode|execute|executar)\s+(?:o\s+)?comando\s+(.+)",
+            normalized_input,
+            flags=re.IGNORECASE,
+        )
+        if shell_command:
+            return {
+                "mode": "action",
+                "capability": "shell.run",
+                "arguments": {
+                    "command": shell_command.group(1).strip(),
+                },
+            }
+
+        move_files = re.fullmatch(
+            r"(?:mova|mover)\s+(?:(?:todos\s+)?os\s+)?arquivos?\s+"
+            r"(\*\.[A-Za-z0-9]+|\.[A-Za-z0-9]+)\s+"
+            r"para\s+(?:(?:a\s+)?pasta\s+)?(.+)",
+            normalized_input,
+            flags=re.IGNORECASE,
+        )
+        if move_files is None:
+            move_files = re.fullmatch(
+                r"(?:mova|mover)\s+(?:(?:todos\s+)?os\s+)?arquivos?\s+"
+                r"([A-Za-z0-9]+)\s+para\s+(.+)",
+                normalized_input,
+                flags=re.IGNORECASE,
+            )
+        if move_files:
+            pattern = move_files.group(1)
+            if pattern.startswith("."):
+                pattern = f"*{pattern}"
+            elif not pattern.startswith("*."):
+                pattern = f"*.{pattern}"
+            root = context.get("current_cwd") or context.get("default_search_root") or "."
+            return {
+                "mode": "action",
+                "capability": "file.move_many",
+                "arguments": {
+                    "source_root": str(root),
+                    "pattern": pattern,
+                    "destination": move_files.group(2).strip().strip('"'),
+                },
+            }
+
         environment_change = re.search(
             r"configure\s+uma\s+vari[aÃ¡]vel\s+de\s+ambiente\s+"
             r"chamada\s+([A-Za-z_][A-Za-z0-9_]*)\s+com\s+valor\s+(.+)",

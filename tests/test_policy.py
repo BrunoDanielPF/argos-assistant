@@ -1,9 +1,9 @@
 from assistant.execution.policy import decide_policy
 
 
-def test_policy_requires_confirmation_for_shell_command():
+def test_policy_blocks_shell_command_when_runtime_has_no_shell_executor():
     decision = decide_policy("run_shell_command")
-    assert decision == "confirm"
+    assert decision == "blocked"
 
 
 def test_policy_requires_confirmation_for_create_file():

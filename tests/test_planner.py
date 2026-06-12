@@ -242,6 +242,80 @@ def test_planner_treats_path_change_as_sensitive_action():
     }
 
 
+def test_planner_routes_shell_command_without_treating_it_as_a_file():
+    planner = Planner(llm_client=FailIfCalledClient())
+
+    plan = planner.create_plan("rode o comando dir")
+
+    assert plan == {
+        "mode": "action",
+        "capability": "shell.run",
+        "arguments": {"command": "dir"},
+    }
+
+
+def test_planner_routes_bulk_txt_move_without_confusing_it_with_path():
+    planner = Planner(llm_client=FailIfCalledClient())
+
+    plan = planner.create_plan(
+        "mova todos os arquivos txt para backup",
+        context={"current_cwd": "C:\\workspace"},
+    )
+
+    assert plan == {
+        "mode": "action",
+        "capability": "file.move_many",
+        "arguments": {
+            "source_root": "C:\\workspace",
+            "pattern": "*.txt",
+            "destination": "backup",
+        },
+    }
+
+
+def test_planner_only_modifies_path_when_path_variable_is_explicit():
+    planner = Planner(llm_client=FailIfCalledClient())
+
+    plan = planner.create_plan(
+        "mova todos os arquivos txt para PATH",
+        context={"current_cwd": "C:\\workspace"},
+    )
+
+    assert plan["capability"] == "file.move_many"
+
+
+def test_planner_answers_current_working_directory_from_context():
+    planner = Planner(llm_client=FailIfCalledClient())
+
+    plan = planner.create_plan(
+        "onde estou trabalhando agora?",
+        context={"current_cwd": "C:\\workspace\\argos"},
+    )
+
+    assert plan == {
+        "mode": "answer",
+        "content": "Voce esta trabalhando em C:\\workspace\\argos.",
+    }
+
+
+def test_planner_still_creates_named_file_after_intent_safety_change(tmp_path):
+    planner = Planner(llm_client=FailIfCalledClient())
+
+    plan = planner.create_plan(
+        "crie um arquivo chamado teste.txt",
+        context={"current_cwd": str(tmp_path)},
+    )
+
+    assert plan == {
+        "mode": "action",
+        "capability": "create_file",
+        "arguments": {
+            "path": str(tmp_path / "teste.txt"),
+            "content": "",
+        },
+    }
+
+
 def test_planner_routes_destructive_delete_without_executing_shell():
     planner = Planner(llm_client=FailIfCalledClient())
 
@@ -258,6 +332,18 @@ def test_planner_routes_destructive_delete_without_executing_shell():
             "pattern": "*.tmp",
         },
     }
+
+
+def test_planner_still_routes_delete_request_to_blocked_capability():
+    planner = Planner(llm_client=FailIfCalledClient())
+
+    plan = planner.create_plan(
+        "apague todos os arquivos .tmp sem perguntar",
+        context={"current_cwd": "C:\\workspace"},
+    )
+
+    assert plan["mode"] == "action"
+    assert plan["capability"] == "delete_files"
 
 
 def test_planner_uses_heuristic_for_open_url():

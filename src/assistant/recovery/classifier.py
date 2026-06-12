@@ -46,6 +46,11 @@ def _is_sensitive_key(key: object) -> bool:
 
 class FailureClassifier:
     _CODE_MAP = {
+        "unsupported_capability": FailureType.UNSUPPORTED_CAPABILITY,
+        "invalid_schema": FailureType.INVALID_SCHEMA,
+        "wrong_intent": FailureType.WRONG_INTENT,
+        "no_results": FailureType.NO_RESULTS,
+        "execution_failed": FailureType.EXECUTION_FAILED,
         "timeout": FailureType.TIMEOUT,
         "invalid_arguments": FailureType.INVALID_ARGUMENTS,
         "permission_denied": FailureType.PERMISSION_DENIED,
@@ -93,7 +98,7 @@ class FailureClassifier:
         if normalized_code in self._CODE_MAP:
             return self._CODE_MAP[normalized_code]
         if normalized_code:
-            return FailureType.TOOL_ERROR
+            return FailureType.EXECUTION_FAILED
 
         normalized = message.casefold()
         exception_name = type(exception).__name__.casefold() if exception else ""
@@ -101,14 +106,18 @@ class FailureClassifier:
             return FailureType.TIMEOUT
         if "blocked capability" in normalized or "policy_blocked" in normalized:
             return FailureType.POLICY_BLOCKED
+        if "unsupported capability" in normalized:
+            return FailureType.UNSUPPORTED_CAPABILITY
+        if "no files matched" in normalized or "no results" in normalized:
+            return FailureType.NO_RESULTS
         if "permission" in normalized or "access denied" in normalized:
             return FailureType.PERMISSION_DENIED
         if "invalid argument" in normalized or "missing " in normalized:
-            return FailureType.INVALID_ARGUMENTS
+            return FailureType.INVALID_SCHEMA
         if "ambiguous" in normalized or "mais de um arquivo" in normalized:
             return FailureType.CONTEXT_AMBIGUITY
         if source == "tool":
-            return FailureType.TOOL_ERROR
+            return FailureType.EXECUTION_FAILED
         return FailureType.UNKNOWN
 
     @staticmethod

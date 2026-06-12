@@ -22,6 +22,9 @@ from assistant.memory.repository import MemoryRepository
 from assistant.memory.session import SessionMemory
 from assistant.planner import Planner
 from assistant.recovery.engine import RecoveryEngine
+from assistant.recovery.dry_run import DryRunBuilder
+from assistant.recovery.planner import RecoveryPlanner
+from assistant.recovery.policy import RecoveryPolicy
 from assistant.recovery.repository import RecoveryRepository
 from assistant.tools.audit import ToolAuditLog
 from assistant.tools.catalog import ToolCatalog
@@ -72,8 +75,9 @@ class RuntimeFactory:
         confirmer=None,
     ) -> AssistantAgent:
         tool_catalog = self.build_tool_catalog()
+        capability_registry = build_default_registry(tool_catalog)
         capabilities = [
-            item.name for item in build_default_registry(tool_catalog).list_all()
+            item.name for item in capability_registry.list_all()
         ]
         session_memory = memory or SessionMemory()
         context = session_memory.snapshot()["context"]
@@ -134,10 +138,15 @@ class RuntimeFactory:
             confirmer=confirmer,
             file_resolver=FileResolver(),
             recovery_engine=RecoveryEngine(
+                planner=RecoveryPlanner(
+                    policy=RecoveryPolicy(capability_registry)
+                ),
+                dry_run_builder=DryRunBuilder(capability_registry),
                 repository=RecoveryRepository(
                     self._config.recovery_audit_file
                 )
             ),
+            capability_registry=capability_registry,
         )
 
     @staticmethod

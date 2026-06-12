@@ -36,3 +36,4 @@ class AgentResponse(StrictModel):
     message: str
     suggestions: list[dict] = Field(default_factory=list)
     confirmation: ConfirmationRequest | None = None
+    error_code: str | None = None

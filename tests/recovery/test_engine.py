@@ -8,9 +8,9 @@ from assistant.recovery.repository import RecoveryRepository
 def test_engine_explains_policy_block_and_suggests_alternative():
     outcome = RecoveryEngine().handle_failure(
         source="action",
-        operation="delete_files",
-        message="Blocked capability: delete_files",
-        arguments={"path": ".", "pattern": "*.tmp"},
+        operation="file.delete_one",
+        message="Blocked capability: file.delete_one",
+        arguments={"path": ".", "recursive": True},
     )
 
     assert outcome.event.failure_type == FailureType.POLICY_BLOCKED

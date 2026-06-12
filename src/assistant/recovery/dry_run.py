@@ -1,68 +1,101 @@
-from assistant.recovery.models import DryRunPlan
-from assistant.recovery.policy import RecoveryPolicy
+from assistant.capabilities.registry import (
+    CapabilityRegistry,
+    build_default_registry,
+)
+from assistant.execution.policy import decide_policy
+from assistant.recovery.models import DryRunPlan, RecoveryRisk
 
 
 class DryRunBuilder:
-    def __init__(self, policy: RecoveryPolicy | None = None) -> None:
-        self._policy = policy or RecoveryPolicy()
+    def __init__(
+        self,
+        registry: CapabilityRegistry | None = None,
+    ) -> None:
+        self._registry = registry or build_default_registry()
 
     def build(self, capability: str, arguments: dict) -> DryRunPlan:
-        decision = self._policy.decide_action(capability, arguments)
-        resources = self._resources(capability, arguments)
-        permissions = self._permissions(capability, resources)
-        if decision.allowed:
+        validation = self._registry.validate(capability, arguments)
+        if not validation.ok:
+            return DryRunPlan(
+                action=capability,
+                risk=RecoveryRisk.MEDIUM,
+                requires_confirmation=False,
+                expected_result=validation.message or "Action is not executable.",
+                can_execute=False,
+                error_code=validation.error_code,
+            )
+
+        assert validation.capability is not None
+        assert validation.arguments is not None
+        canonical = validation.capability.name
+        normalized_arguments = validation.arguments
+        policy = decide_policy(
+            canonical,
+            normalized_arguments,
+            registry=self._registry,
+        )
+        resources = self._resources(canonical, normalized_arguments)
+        permissions = self._permissions(canonical, resources)
+        risk = self._risk(canonical, policy)
+        allowed = policy != "blocked"
+        if allowed:
             expected = (
-                f"A acao {capability} seria executada sobre "
+                f"A acao {canonical} seria executada sobre "
                 f"{', '.join(resources) if resources else 'os recursos informados'}."
             )
         else:
             expected = (
-                f"A acao {capability} nao sera executada automaticamente; "
-                "apenas uma alternativa segura pode ser sugerida."
+                f"A acao {canonical} foi bloqueada pela policy e nao pode "
+                "ser executada."
             )
         return DryRunPlan(
-            action=capability,
+            action=canonical,
             resources_affected=resources,
-            risk=decision.risk,
+            risk=risk,
             permissions_required=permissions,
-            requires_confirmation=decision.requires_confirmation,
+            requires_confirmation=policy == "confirm",
             expected_result=expected,
-            can_execute=decision.allowed,
+            can_execute=allowed,
+            error_code="policy_blocked" if not allowed else None,
         )
 
     @staticmethod
     def _resources(capability: str, arguments: dict) -> list[str]:
         resources = []
-        for key in ("path", "source", "destination", "root"):
+        for key in ("path", "source_root", "destination", "root"):
             value = arguments.get(key)
             if isinstance(value, str) and value.strip() and value not in resources:
                 resources.append(value)
-        if capability == "modify_path":
-            resources.append("environment:PATH")
-        if capability == "modify_environment_variable":
-            name = arguments.get("name", "unknown")
-            resources.append(f"environment:{name}")
+        for value in arguments.get("sources", []):
+            if isinstance(value, str) and value not in resources:
+                resources.append(value)
         return resources
 
     @staticmethod
     def _permissions(capability: str, resources: list[str]) -> list[str]:
-        if capability in {"open_file", "search_files", "files.inspect"}:
+        if capability in {
+            "file.read",
+            "file.open",
+            "file.delete_dry_run",
+            "files.search",
+        }:
             return [f"read:{resource}" for resource in resources]
         if capability in {
-            "create_file",
-            "write_file",
-            "files.move",
-            "files.write",
-            "delete_file",
-            "delete_files",
+            "file.create",
+            "file.write",
+            "file.create_directory",
+            "file.delete_one",
+            "file.move_many",
         }:
             return [f"write:{resource}" for resource in resources]
-        if capability in {"run_shell_command", "shell.run"}:
-            return ["subprocess"]
-        if capability == "modify_path":
-            return ["environment_write:PATH"]
-        if capability == "modify_environment_variable":
-            return ["environment_write"]
-        if capability in {"install_tool", "tool.install"}:
-            return ["filesystem_write", "subprocess"]
         return [f"execute:{capability}"]
+
+    @staticmethod
+    def _risk(capability: str, policy: str) -> RecoveryRisk:
+        if policy == "blocked":
+            return RecoveryRisk.CRITICAL
+        if capability in {"file.delete_one", "file.move_many"}:
+            return RecoveryRisk.HIGH
+        if policy == "confirm":
+            return RecoveryRisk.MEDIUM
+        return RecoveryRisk.LOW

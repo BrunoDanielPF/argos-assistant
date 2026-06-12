@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import os
 from pathlib import Path
 import subprocess
+import shutil
 from uuid import uuid4
 import webbrowser
 
@@ -60,6 +61,14 @@ class ActionExecutor:
         subprocess.Popen([path])
 
     def execute(self, capability_name: str, args: dict) -> ExecutionResult:
+        capability_name = {
+            "create_file": "file.create",
+            "write_file": "file.write",
+            "read_file": "file.read",
+            "open_file": "file.open",
+            "create_directory": "file.create_directory",
+            "search_files": "files.search",
+        }.get(capability_name, capability_name)
         if capability_name == "open_application":
             application = args.get("application", args.get("app", args.get("name")))
             if not isinstance(application, str) or not application.strip():
@@ -67,33 +76,70 @@ class ActionExecutor:
                     ok=False, message="Missing application name for open_application"
                 )
             normalized_application = KNOWN_APPLICATIONS.get(application.strip().lower(), application)
-            self._open_application(normalized_application)
+            try:
+                self._open_application(normalized_application)
+            except OSError as exc:
+                return ExecutionResult(
+                    ok=False,
+                    message=f"Could not open application {application}: {exc}",
+                    error_code="execution_failed",
+                )
             return ExecutionResult(ok=True, message=f"Opened application {application}")
 
         if capability_name == "open_url":
             url = args["url"]
-            self._open_url(url)
+            try:
+                self._open_url(url)
+            except OSError as exc:
+                return ExecutionResult(
+                    ok=False,
+                    message=f"Could not open URL {url}: {exc}",
+                    error_code="execution_failed",
+                )
             return ExecutionResult(ok=True, message=f"Opened {url}")
 
-        if capability_name == "open_file":
+        if capability_name == "file.open":
             path = args.get("path")
             if not isinstance(path, str) or not path.strip():
-                return ExecutionResult(ok=False, message="Missing path for open_file")
+                return ExecutionResult(
+                    ok=False,
+                    message="Missing path for file.open",
+                    error_code="invalid_schema",
+                )
 
             file_path = Path(path)
-            if not file_path.exists():
-                return ExecutionResult(ok=False, message=f"File not found: {path}")
+            if not file_path.is_file():
+                return ExecutionResult(
+                    ok=False,
+                    message=f"File not found: {path}",
+                    error_code="not_found",
+                )
 
-            self._open_file(str(file_path))
+            try:
+                self._open_file(str(file_path))
+            except OSError as exc:
+                return ExecutionResult(
+                    ok=False,
+                    message=f"Could not open file {file_path}: {exc}",
+                    error_code="execution_failed",
+                )
             return ExecutionResult(ok=True, message=f"Opened file {file_path}")
 
-        if capability_name == "create_file":
+        if capability_name == "file.create":
             path = args.get("path")
             content = args.get("content", "")
             if not isinstance(path, str) or not path.strip():
-                return ExecutionResult(ok=False, message="Missing path for create_file")
+                return ExecutionResult(
+                    ok=False,
+                    message="Missing path for file.create",
+                    error_code="invalid_schema",
+                )
             if not isinstance(content, str):
-                return ExecutionResult(ok=False, message="Invalid content for create_file")
+                return ExecutionResult(
+                    ok=False,
+                    message="Invalid content for file.create",
+                    error_code="invalid_schema",
+                )
 
             file_path = Path(path)
             file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -104,22 +150,40 @@ class ActionExecutor:
                 data={"path": str(file_path)},
             )
 
-        if capability_name == "write_file":
+        if capability_name == "file.write":
             path = args.get("path")
             content = args.get("content")
-            write_mode = args.get("write_mode")
+            write_mode = args.get("mode", args.get("write_mode"))
+            if write_mode == "replace":
+                write_mode = "overwrite"
             if not isinstance(path, str) or not path.strip():
-                return ExecutionResult(ok=False, message="Missing path for write_file")
+                return ExecutionResult(
+                    ok=False,
+                    message="Missing path for file.write",
+                    error_code="invalid_schema",
+                )
             if not isinstance(content, str):
-                return ExecutionResult(ok=False, message="Invalid content for write_file")
-            if write_mode not in {"replace", "append"}:
-                return ExecutionResult(ok=False, message="Invalid write mode for write_file")
+                return ExecutionResult(
+                    ok=False,
+                    message="Invalid content for file.write",
+                    error_code="invalid_schema",
+                )
+            if write_mode not in {"overwrite", "append"}:
+                return ExecutionResult(
+                    ok=False,
+                    message="Invalid mode for file.write",
+                    error_code="invalid_schema",
+                )
 
             file_path = Path(path)
             if not file_path.is_file():
-                return ExecutionResult(ok=False, message=f"File not found: {path}")
+                return ExecutionResult(
+                    ok=False,
+                    message=f"File not found: {path}",
+                    error_code="not_found",
+                )
 
-            if write_mode == "replace":
+            if write_mode == "overwrite":
                 updated_content = content
             else:
                 current_content = file_path.read_text(encoding="utf-8")
@@ -129,10 +193,139 @@ class ActionExecutor:
             return ExecutionResult(
                 ok=True,
                 message=f"Updated file {file_path}",
-                data={"path": str(file_path), "write_mode": write_mode},
+                data={"path": str(file_path), "mode": write_mode},
             )
 
-        if capability_name == "search_files":
+        if capability_name == "file.read":
+            path = args.get("path")
+            if not isinstance(path, str) or not path.strip():
+                return ExecutionResult(
+                    ok=False,
+                    message="Missing path for file.read",
+                    error_code="invalid_schema",
+                )
+            file_path = Path(path)
+            if not file_path.is_file():
+                return ExecutionResult(
+                    ok=False,
+                    message=f"File not found: {path}",
+                    error_code="not_found",
+                )
+            try:
+                content = file_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as exc:
+                return ExecutionResult(
+                    ok=False,
+                    message=f"Could not read file {file_path}: {exc}",
+                    error_code="execution_failed",
+                )
+            return ExecutionResult(
+                ok=True,
+                message=content,
+                data={"path": str(file_path), "content": content},
+            )
+
+        if capability_name == "file.create_directory":
+            path = args.get("path")
+            if not isinstance(path, str) or not path.strip():
+                return ExecutionResult(
+                    ok=False,
+                    message="Missing path for file.create_directory",
+                    error_code="invalid_schema",
+                )
+            directory = Path(path)
+            try:
+                directory.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                return ExecutionResult(
+                    ok=False,
+                    message=f"Could not create directory {directory}: {exc}",
+                    error_code="execution_failed",
+                )
+            return ExecutionResult(
+                ok=True,
+                message=f"Created directory {directory}",
+                data={"path": str(directory)},
+            )
+
+        if capability_name == "file.delete_dry_run":
+            root = Path(args["path"])
+            pattern = args["pattern"]
+            if not root.is_dir():
+                return ExecutionResult(
+                    ok=False,
+                    message=f"Directory not found: {root}",
+                    error_code="not_found",
+                )
+            candidates = sorted(
+                str(path)
+                for path in root.glob(pattern)
+                if path.is_file()
+            )
+            return ExecutionResult(
+                ok=True,
+                message=(
+                    f"Dry-run found {len(candidates)} candidate(s) "
+                    f"for '{pattern}' under '{root}'."
+                ),
+                data={"candidates": candidates, "count": len(candidates)},
+            )
+
+        if capability_name == "file.delete_one":
+            target = Path(args["path"])
+            if not target.is_file():
+                return ExecutionResult(
+                    ok=False,
+                    message=f"File not found: {target}",
+                    error_code="not_found",
+                )
+            try:
+                target.unlink()
+            except OSError as exc:
+                return ExecutionResult(
+                    ok=False,
+                    message=f"Could not delete file {target}: {exc}",
+                    error_code="execution_failed",
+                )
+            return ExecutionResult(ok=True, message=f"Deleted file {target}")
+
+        if capability_name == "file.move_many":
+            destination = Path(args["destination"])
+            sources = [Path(item) for item in args.get("sources", [])]
+            if not sources:
+                source_root = Path(args["source_root"])
+                sources = sorted(
+                    path
+                    for path in source_root.glob(args["pattern"])
+                    if path.is_file()
+                )
+            missing = [str(path) for path in sources if not path.is_file()]
+            if missing:
+                return ExecutionResult(
+                    ok=False,
+                    message=f"File not found: {missing[0]}",
+                    error_code="not_found",
+                )
+            try:
+                destination.mkdir(parents=True, exist_ok=True)
+                moved = []
+                for source in sources:
+                    target = destination / source.name
+                    shutil.move(str(source), str(target))
+                    moved.append(str(target))
+            except OSError as exc:
+                return ExecutionResult(
+                    ok=False,
+                    message=f"Could not move files: {exc}",
+                    error_code="execution_failed",
+                )
+            return ExecutionResult(
+                ok=True,
+                message=f"Moved {len(moved)} file(s) to {destination}",
+                data={"moved": moved},
+            )
+
+        if capability_name == "files.search":
             root = Path(args["root"])
             pattern = args["pattern"]
             max_results = args.get("max_results", 5)
@@ -142,8 +335,14 @@ class ActionExecutor:
             matches = sorted(str(path) for path in root.rglob(pattern))
             if not matches:
                 return ExecutionResult(
-                    ok=False,
+                    ok=True,
                     message=f"No files matched '{pattern}' under '{root}'",
+                    data={
+                        "matches": [],
+                        "all_count": 0,
+                        "status": "no_results",
+                    },
+                    error_code="no_results",
                 )
 
             visible_matches = matches[:max_results]
@@ -237,5 +436,7 @@ class ActionExecutor:
                 )
 
         return ExecutionResult(
-            ok=False, message=f"Unsupported capability: {capability_name}"
+            ok=False,
+            message=f"Unsupported capability: {capability_name}",
+            error_code="unsupported_capability",
         )

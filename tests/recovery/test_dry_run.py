@@ -10,7 +10,7 @@ def test_dry_run_describes_file_creation_without_creating_file(tmp_path):
         {"path": str(target), "content": "hello"},
     )
 
-    assert plan.action == "create_file"
+    assert plan.action == "file.create"
     assert plan.resources_affected == [str(target)]
     assert plan.permissions_required == [f"write:{target}"]
     assert plan.risk == RecoveryRisk.MEDIUM
@@ -18,13 +18,13 @@ def test_dry_run_describes_file_creation_without_creating_file(tmp_path):
     assert not target.exists()
 
 
-def test_dry_run_marks_delete_as_non_executable():
+def test_delete_dry_run_is_read_only_and_executable():
     plan = DryRunBuilder().build(
         "delete_files",
         {"path": ".", "pattern": "*.tmp"},
     )
 
-    assert plan.risk == RecoveryRisk.CRITICAL
-    assert plan.can_execute is False
-    assert "nao sera executada automaticamente" in plan.expected_result.lower()
-
+    assert plan.action == "file.delete_dry_run"
+    assert plan.risk == RecoveryRisk.LOW
+    assert plan.can_execute is True
+    assert plan.requires_confirmation is False
