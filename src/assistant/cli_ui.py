@@ -31,8 +31,16 @@ class ArgosUI:
 
     def render_result(self, result: dict) -> None:
         ok = bool(result["ok"])
-        title = "Resposta" if ok else "Erro"
-        border_style = "cyan" if ok else "red"
+        status = result.get("status")
+        if status == "pending_approval":
+            title = "Aprovacao pendente"
+            border_style = "yellow"
+        elif status in {"pending_confirmation", "waiting_confirmation"}:
+            title = "Confirmacao pendente"
+            border_style = "yellow"
+        else:
+            title = "Resposta" if ok else "Erro"
+            border_style = "cyan" if ok else "red"
         body = self._message_renderable(str(result["message"]))
         self.console.print(Panel(body, title=title, border_style=border_style))
 

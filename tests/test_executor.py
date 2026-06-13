@@ -181,6 +181,37 @@ def test_executor_write_file_rejects_missing_file(tmp_path):
     assert not target.exists()
 
 
+def test_executor_write_file_rejects_directory_as_invalid_path(tmp_path):
+    target = tmp_path / "backup"
+    target.mkdir()
+
+    result = ActionExecutor().execute(
+        "write_file",
+        {"path": str(target), "content": "texto", "write_mode": "replace"},
+    )
+
+    assert result.ok is False
+    assert result.error_code == "invalid_path"
+
+
+def test_executor_write_file_maps_permission_error(monkeypatch, tmp_path):
+    target = tmp_path / "hello_world.md"
+    target.write_text("hello", encoding="utf-8")
+
+    def deny_write(self, *args, **kwargs):
+        raise PermissionError("access denied")
+
+    monkeypatch.setattr(type(target), "write_text", deny_write)
+
+    result = ActionExecutor().execute(
+        "write_file",
+        {"path": str(target), "content": "texto", "write_mode": "replace"},
+    )
+
+    assert result.ok is False
+    assert result.error_code == "permission_denied"
+
+
 def test_executor_write_file_rejects_unknown_mode(tmp_path):
     target = tmp_path / "hello_world.md"
     target.write_text("hello", encoding="utf-8")

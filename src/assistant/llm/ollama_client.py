@@ -19,13 +19,28 @@ class OllamaClient:
         self._options = options or {}
 
     def chat(self, messages: list[dict]) -> dict:
+        return self._chat(messages, output_format="json")
+
+    def chat_structured(
+        self,
+        messages: list[dict],
+        schema: dict,
+    ) -> dict:
+        return self._chat(messages, output_format=schema)
+
+    def _chat(
+        self,
+        messages: list[dict],
+        *,
+        output_format: str | dict,
+    ) -> dict:
         response = httpx.post(
             f"{self._base_url}/chat",
             json={
                 "model": self._model,
                 "messages": messages,
                 "stream": False,
-                "format": "json",
+                "format": output_format,
                 "think": self._think,
                 "keep_alive": self._keep_alive,
                 "options": self._options,

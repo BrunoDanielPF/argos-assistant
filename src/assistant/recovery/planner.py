@@ -73,7 +73,10 @@ class RecoveryPlanner:
                     "resultado correspondeu aos filtros informados."
                 ),
             )
-        if event.failure_type == FailureType.UNSUPPORTED_CAPABILITY:
+        if event.failure_type in {
+            FailureType.UNSUPPORTED_CAPABILITY,
+            FailureType.CAPABILITY_GAP,
+        }:
             return RecoveryPlan(
                 failure_type=event.failure_type,
                 strategy=RecoveryStrategy.SUGGEST_SAFE_ALTERNATIVE,
@@ -81,8 +84,8 @@ class RecoveryPlanner:
                 requires_confirmation=False,
                 user_message=(
                     f"O Argos ainda nao oferece suporte a {event.operation}. "
-                    "Use uma alternativa suportada ou execute a operacao "
-                    "manualmente fora do Argos."
+                    "Como alternativa, uma tool local so pode ser criada como "
+                    "draft e depois de confirmacao explicita."
                 ),
             )
         if event.failure_type == FailureType.INVALID_SCHEMA:

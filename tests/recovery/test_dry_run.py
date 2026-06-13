@@ -28,3 +28,23 @@ def test_delete_dry_run_is_read_only_and_executable():
     assert plan.risk == RecoveryRisk.LOW
     assert plan.can_execute is True
     assert plan.requires_confirmation is False
+    assert "simulacao" in plan.expected_result.lower()
+    assert "nenhum arquivo" in plan.expected_result.lower()
+
+
+def test_real_delete_dry_run_explains_affected_resource_and_confirmation(
+    tmp_path,
+):
+    target = tmp_path / "lixo.tmp"
+    target.write_text("keep", encoding="utf-8")
+
+    plan = DryRunBuilder().build(
+        "file.delete_one",
+        {"path": str(target), "recursive": False},
+    )
+
+    assert plan.can_execute is True
+    assert plan.requires_confirmation is True
+    assert plan.resources_affected == [str(target)]
+    assert "excluiria" in plan.expected_result.lower()
+    assert target.exists()

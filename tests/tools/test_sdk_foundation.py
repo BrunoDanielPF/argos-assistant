@@ -101,3 +101,15 @@ def test_validator_accepts_safe_tool(tmp_path):
     report = ToolValidator().validate(tool_dir)
 
     assert report.ok is True
+
+
+def test_read_only_source_validator_rejects_unknown_calls():
+    report = ToolValidator().validate_read_only_source(
+        "def run(arguments):\n    return mystery(arguments['path'])\n"
+    )
+
+    assert report.ok is False
+    assert any(
+        finding.code == "unknown_call"
+        for finding in report.findings
+    )

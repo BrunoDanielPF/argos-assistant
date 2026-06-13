@@ -1,7 +1,9 @@
 from dataclasses import dataclass
+from hashlib import sha256
 import json
 from pathlib import Path
 import re
+import shutil
 
 import yaml
 
@@ -33,9 +35,34 @@ class ToolDraftGenerator:
         if not isinstance(name, str) or not self._name_pattern.fullmatch(name):
             raise InvalidToolName(str(name))
         draft_dir = self._drafts_root / name / version
+        definition_hash = sha256(
+            json.dumps(
+                definition,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
         if draft_dir.exists():
+            hash_file = draft_dir / ".definition-hash"
+            record = self._state_store.get(name, version)
+            if (
+                hash_file.is_file()
+                and hash_file.read_text(encoding="ascii").strip()
+                == definition_hash
+                and record is not None
+                and record.state == "validated"
+            ):
+                return GeneratedToolDraft(
+                    path=draft_dir,
+                    state=record.state,
+                )
             raise FileExistsError(draft_dir)
         draft_dir.mkdir(parents=True)
+        (draft_dir / ".definition-hash").write_text(
+            definition_hash,
+            encoding="ascii",
+        )
         manifest = {
             "schema_version": "1.0",
             "name": name,
@@ -115,3 +142,23 @@ class ToolDraftGenerator:
         target_state = "validated" if report.ok else "rejected"
         record = self._state_store.transition(name, version, target_state)
         return GeneratedToolDraft(path=draft_dir, state=record.state)
+
+    def remove_quarantined(
+        self,
+        *,
+        name: str,
+        version: str,
+        draft_path: Path,
+    ) -> bool:
+        root = self._drafts_root.resolve()
+        target = Path(draft_path).resolve()
+        if root not in target.parents:
+            raise ValueError("draft path is outside quarantine")
+        record = self._state_store.get(name, version)
+        if record is None or record.state not in {"validated", "rejected"}:
+            return False
+        if record.state == "validated":
+            self._state_store.transition(name, version, "rejected")
+        if target.is_dir():
+            shutil.rmtree(target)
+        return True

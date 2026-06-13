@@ -5,6 +5,8 @@ from pathlib import Path
 import re
 import unicodedata
 
+from assistant.intent.router import DeterministicIntentRouter
+
 
 class PlannerError(ValueError):
     pass
@@ -29,11 +31,13 @@ class Planner:
         capabilities: list[str] | None = None,
         loading_context=None,
         tool_definitions: list[dict] | None = None,
+        intent_router: DeterministicIntentRouter | None = None,
     ) -> None:
         self._llm_client = llm_client
         self._capabilities = capabilities or []
         self._loading_context = loading_context or nullcontext
         self._tool_definitions = tool_definitions or []
+        self._intent_router = intent_router or DeterministicIntentRouter()
 
     def _build_system_prompt(self, context: dict | None = None) -> str:
         context = context or {}
@@ -84,6 +88,13 @@ class Planner:
         pending_clarification = (context or {}).get("pending_clarification")
         if isinstance(pending_clarification, dict):
             return self._resolve_pending_clarification(user_input, pending_clarification)
+
+        routed_plan = self._intent_router.route(
+            user_input,
+            context=context or {},
+        )
+        if routed_plan is not None:
+            return self._validate_plan_shape(routed_plan)
 
         heuristic_plan = self._heuristic_plan(user_input, context=context)
         if heuristic_plan is not None:
@@ -149,6 +160,7 @@ class Planner:
                 response_text = self._extract_response_text(response)
                 parsed = self._parse_response_text(response_text)
         parsed = self._apply_explicit_file_path(user_input, parsed)
+        parsed = self._apply_semantic_intent_guard(user_input, parsed)
         return self._validate_plan_shape(parsed)
 
     @staticmethod
@@ -257,7 +269,23 @@ class Planner:
     def _heuristic_plan(self, user_input: str, context: dict | None = None) -> dict | None:
         normalized_input = user_input.strip()
         lowered_input = normalized_input.lower()
+        ascii_input = self._normalize_text(normalized_input)
         context = context or {}
+
+        metadata_request = re.search(
+            r"(?:data|hora).{0,30}(?:criacao|criado|criada).+?"
+            r"arquivo\s+(.+)$",
+            ascii_input,
+            flags=re.IGNORECASE,
+        )
+        if metadata_request:
+            return {
+                "mode": "action",
+                "capability": "file.metadata.stat",
+                "arguments": {
+                    "path": metadata_request.group(1).strip().strip('"'),
+                },
+            }
 
         if re.fullmatch(
             r"(?:onde|em que (?:pasta|diret[oÃ³]rio)) "
@@ -313,9 +341,11 @@ class Planner:
             }
 
         search_current = re.fullmatch(
-            r"(?:buscar|busque|procure)\s+arquivos?\s+"
-            r"(\*?\.[A-Za-z0-9]+|[A-Za-z0-9]+)\s+"
-            r"(?:nesta pasta|nessa pasta|aqui|na pasta atual)",
+            r"(?:buscar|busque|procure|liste|listar|mostre|"
+            r"quais(?:\s+s[aã]o)?)(?:\s+os)?\s+arquivos?\s+"
+            r"(\*?\.[A-Za-z0-9]+|[A-Za-z0-9]+)"
+            r"(?:\s+(?:existem?\s+)?"
+            r"(?:nesta pasta|nessa pasta|aqui|na pasta atual))?",
             normalized_input,
             flags=re.IGNORECASE,
         )
@@ -371,11 +401,26 @@ class Planner:
             flags=re.IGNORECASE,
         )
         if shell_command:
+            command = shell_command.group(1).strip()
+            root = context.get("current_cwd") or context.get(
+                "default_search_root"
+            )
+            if (
+                " ".join(command.casefold().split()) == "git status"
+                and "local.git.status" in self._capabilities
+                and isinstance(root, str)
+                and root.strip()
+            ):
+                return {
+                    "mode": "action",
+                    "capability": "local.git.status",
+                    "arguments": {"cwd": root},
+                }
             return {
                 "mode": "action",
                 "capability": "shell.run",
                 "arguments": {
-                    "command": shell_command.group(1).strip(),
+                    "command": command,
                 },
             }
 
@@ -410,6 +455,30 @@ class Planner:
                 },
             }
 
+        environment_change_accented = re.search(
+            r"configure\s+uma\s+variável\s+de\s+ambiente\s+"
+            r"chamada\s+([A-Za-z_][A-Za-z0-9_]*)\s+com\s+valor\s+(.+)",
+            normalized_input,
+            flags=re.IGNORECASE,
+        )
+        if environment_change_accented:
+            capability = (
+                "local.windows.env_set_user"
+                if "local.windows.env_set_user" in self._capabilities
+                else "modify_environment_variable"
+            )
+            arguments = {
+                "name": environment_change_accented.group(1),
+                "value": environment_change_accented.group(2).strip(),
+            }
+            if capability == "modify_environment_variable":
+                arguments["scope"] = "user"
+            return {
+                "mode": "action",
+                "capability": capability,
+                "arguments": arguments,
+            }
+
         environment_change = re.search(
             r"configure\s+uma\s+vari[aÃ¡]vel\s+de\s+ambiente\s+"
             r"chamada\s+([A-Za-z_][A-Za-z0-9_]*)\s+com\s+valor\s+(.+)",
@@ -417,14 +486,21 @@ class Planner:
             flags=re.IGNORECASE,
         )
         if environment_change:
+            capability = (
+                "local.windows.env_set_user"
+                if "local.windows.env_set_user" in self._capabilities
+                else "modify_environment_variable"
+            )
+            arguments = {
+                "name": environment_change.group(1),
+                "value": environment_change.group(2).strip(),
+            }
+            if capability == "modify_environment_variable":
+                arguments["scope"] = "user"
             return {
                 "mode": "action",
-                "capability": "modify_environment_variable",
-                "arguments": {
-                    "name": environment_change.group(1),
-                    "value": environment_change.group(2).strip(),
-                    "scope": "user",
-                },
+                "capability": capability,
+                "arguments": arguments,
             }
 
         path_change = re.search(
@@ -593,6 +669,42 @@ class Planner:
                 }
 
         return None
+
+    def _apply_semantic_intent_guard(
+        self,
+        user_input: str,
+        plan: dict,
+    ) -> dict:
+        normalized = self._normalize_text(user_input)
+        if "variavel de ambiente" not in normalized:
+            return plan
+        match = re.search(
+            r"(?:defina|configure|configurar)\s+"
+            r"(?:uma\s+vari[aá]vel\s+de\s+ambiente\s+chamada\s+)?"
+            r"([A-Za-z_][A-Za-z0-9_]*)\s+"
+            r"(?:como\s+vari[aá]vel\s+de\s+ambiente\s+)?"
+            r"com\s+valor\s+(.+)$",
+            user_input,
+            flags=re.IGNORECASE,
+        )
+        if match is None:
+            return plan
+        capability = (
+            "local.windows.env_set_user"
+            if "local.windows.env_set_user" in self._capabilities
+            else "modify_environment_variable"
+        )
+        arguments = {
+            "name": match.group(1),
+            "value": match.group(2).strip(),
+        }
+        if capability == "modify_environment_variable":
+            arguments["scope"] = "user"
+        return {
+            "mode": "action",
+            "capability": capability,
+            "arguments": arguments,
+        }
 
     def _heuristic_reminder_plan(self, user_input: str) -> dict:
         normalized = self._normalize_text(user_input)

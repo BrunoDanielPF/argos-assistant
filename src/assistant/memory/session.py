@@ -71,6 +71,12 @@ class SessionMemory:
         self._context.pending_clarification = None
         self._context.active_task = None
 
+    def set_active_task(self, task: dict) -> None:
+        self._context.active_task = dict(task)
+
+    def clear_active_task(self) -> None:
+        self._context.active_task = None
+
     def snapshot(self) -> dict:
         return SessionSnapshot(
             history=self._history,

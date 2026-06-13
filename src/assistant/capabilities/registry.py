@@ -229,11 +229,30 @@ def build_default_registry(tool_catalog=None) -> CapabilityRegistry:
                 name=tool.manifest.name,
                 description=tool.manifest.description,
                 schema=_dynamic_schema(tool.manifest.input_schema),
-                policy="confirm",
+                policy=_dynamic_policy(
+                    tool.manifest.name,
+                    tool.manifest.permissions,
+                ),
             )
             for tool in tool_catalog.list_enabled()
         )
     return CapabilityRegistry(capabilities)
+
+
+def _dynamic_policy(name: str, permissions) -> Literal["allow", "confirm"]:
+    normalized = name.casefold()
+    if any(
+        marker in normalized
+        for marker in ("environment", ".env", "system", "shell")
+    ):
+        return "confirm"
+    if (
+        not permissions.filesystem.write
+        and not permissions.network.enabled
+        and not permissions.subprocess.executables
+    ):
+        return "allow"
+    return "confirm"
 
 
 def _dynamic_schema(schema: dict) -> type[ActionSchema]:

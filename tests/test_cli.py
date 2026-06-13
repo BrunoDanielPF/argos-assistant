@@ -77,6 +77,66 @@ def test_cli_gateway_unavailable_does_not_fallback_silently(monkeypatch):
     assert "argos start" in result.stdout
 
 
+def test_tools_pending_lists_session_workflows(monkeypatch):
+    class FakeGatewayClient:
+        def list_capability_workflows(self, session_id=None):
+            assert session_id == "project-1"
+            return [
+                {
+                    "workflow_id": "workflow-123",
+                    "status": "WAITING_TOOL_APPROVAL",
+                    "tool_name": "local.file.metadata_stat",
+                    "tool_version": "1.0.0",
+                }
+            ]
+
+    monkeypatch.setattr(
+        "assistant.cli.build_gateway_client",
+        lambda: FakeGatewayClient(),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        ["tools", "pending", "--session", "project-1"],
+    )
+
+    assert result.exit_code == 0
+    assert "workflow-123" in result.stdout
+    assert "WAITING_TOOL_APPROVAL" in result.stdout
+
+
+def test_tools_cancel_cancels_workflow(monkeypatch):
+    calls = []
+
+    class FakeGatewayClient:
+        def cancel_capability_workflow(self, workflow_id):
+            calls.append(workflow_id)
+            return type(
+                "Response",
+                (),
+                {
+                    "ok": True,
+                    "message": "Workflow cancelado.",
+                    "workflow_id": workflow_id,
+                    "workflow_status": "TOOL_APPROVAL_CANCELLED",
+                },
+            )()
+
+    monkeypatch.setattr(
+        "assistant.cli.build_gateway_client",
+        lambda: FakeGatewayClient(),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        ["tools", "cancel", "workflow-123"],
+    )
+
+    assert result.exit_code == 0
+    assert calls == ["workflow-123"]
+    assert "Workflow cancelado" in result.stdout
+
+
 def test_cli_prompts_and_resumes_gateway_confirmation(monkeypatch):
     from assistant.runtime.contracts import (
         AgentResponse,

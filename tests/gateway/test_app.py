@@ -266,3 +266,35 @@ def test_confirmation_endpoint_rejects_duplicate_decision(tmp_path):
 
     assert response.status_code == 409
     repository.close()
+
+
+def test_confirmation_endpoint_structures_predictable_failure(tmp_path):
+    class PermissionDeniedService(FakeGatewayService):
+        def resolve_confirmation(self, confirmation_id, approved):
+            raise PermissionError("access denied")
+
+    token_store = LocalTokenStore(
+        tmp_path / "gateway.token",
+        permission_hardener=lambda path: None,
+    )
+    token = token_store.get_or_create()
+    repository = SessionRepository(tmp_path / "argos.db")
+    client = TestClient(
+        create_gateway_app(
+            service=PermissionDeniedService(),
+            token_store=token_store,
+            repository=repository,
+            model_name="test-model",
+        ),
+        raise_server_exceptions=False,
+    )
+
+    response = client.post(
+        "/v1/confirmations/confirm-1",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"approved": True},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error_code"] == "permission_denied"
+    repository.close()

@@ -50,6 +50,23 @@ def test_render_result_falls_back_to_plain_text():
     assert "Erro" in rendered
 
 
+def test_pending_approval_is_not_rendered_as_error():
+    ui, output = build_ui()
+
+    ui.render_result(
+        {
+            "ok": True,
+            "status": "pending_approval",
+            "message": "Draft validado.",
+            "suggestions": [],
+        }
+    )
+
+    rendered = output.getvalue()
+    assert "Aprovacao pendente" in rendered
+    assert "Erro" not in rendered
+
+
 def test_render_help_groups_commands_and_examples():
     ui, output = build_ui()
 

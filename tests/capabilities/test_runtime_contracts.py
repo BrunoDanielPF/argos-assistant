@@ -1,4 +1,5 @@
 from assistant.agent import AssistantAgent
+from assistant.capabilities.provisioning import CapabilityProvisioningService
 from assistant.capabilities.registry import build_default_registry
 from assistant.execution.executor import ActionExecutor
 from assistant.execution.policy import decide_policy
@@ -6,6 +7,12 @@ from assistant.files.path_resolver import PathResolver
 from assistant.memory.session import SessionMemory
 from assistant.planner import Planner
 from assistant.recovery.dry_run import DryRunBuilder
+from assistant.recovery.engine import RecoveryEngine
+from assistant.recovery.repository import RecoveryRepository
+from assistant.tools.audit import ToolAuditLog
+from assistant.tools.generator import ToolDraftGenerator
+from assistant.tools.installer import ToolInstaller
+from assistant.tools.state import ToolStateStore
 
 
 class FailIfCalledClient:
@@ -34,6 +41,24 @@ def build_memory(tmp_path):
         user_home=str(tmp_path),
     )
     return memory
+
+
+def build_provisioning_service(tmp_path):
+    state_store = ToolStateStore(tmp_path / "tool-state.json")
+    return CapabilityProvisioningService(
+        generator=ToolDraftGenerator(
+            tmp_path / "drafts",
+            state_store,
+        ),
+        state_store=state_store,
+        installer=ToolInstaller(
+            tools_root=tmp_path / "tools",
+            envs_root=tmp_path / "envs",
+            state_store=state_store,
+            create_environment=False,
+        ),
+        audit_log=ToolAuditLog(tmp_path / "tools-audit.jsonl"),
+    )
 
 
 def test_registry_is_source_of_truth_for_canonical_file_actions():
@@ -107,6 +132,35 @@ def test_invalid_write_schema_never_reaches_confirmation(tmp_path):
     assert "confirmation" not in response
 
 
+def test_write_directory_is_rejected_without_fuzzy_file_resolution(tmp_path):
+    target = tmp_path / "backup"
+    target.mkdir()
+    agent = AssistantAgent(
+        planner=StaticPlanner(
+            {
+                "mode": "action",
+                "capability": "write_file",
+                "arguments": {
+                    "path": str(target),
+                    "content": "new",
+                    "mode": "overwrite",
+                },
+            }
+        ),
+        executor=FailIfCalledExecutor(),
+        memory=build_memory(tmp_path),
+        capability_registry=build_default_registry(),
+    )
+
+    response = agent.handle("write")
+
+    assert response["status"] == "completed"
+    assert response["ok"] is False
+    assert response["error_code"] == "invalid_path"
+    assert "clarification" not in response
+    assert "confirmation" not in response
+
+
 def test_empty_file_write_defaults_to_overwrite(tmp_path):
     target = tmp_path / "notes.txt"
     target.write_text("", encoding="utf-8")
@@ -134,13 +188,21 @@ def test_path_resolver_uses_current_cwd_for_context_markers_and_relative_paths(
     tmp_path,
 ):
     resolver = PathResolver()
-    context = {"current_cwd": str(tmp_path)}
+    context = {
+        "current_cwd": str(tmp_path),
+        "default_search_root": "C:\\fallback",
+        "user_home": "C:\\Users\\nome-antigo",
+    }
 
     assert resolver.resolve("aqui", context) == tmp_path.resolve()
     assert resolver.resolve("nesta pasta", context) == tmp_path.resolve()
+    assert resolver.resolve("pasta atual", context) == tmp_path.resolve()
     assert resolver.resolve("docs\\notes.txt", context) == (
         tmp_path / "docs" / "notes.txt"
     ).resolve()
+    assert "nome-antigo" not in str(
+        resolver.resolve("notes.txt", context)
+    )
 
 
 def test_planner_routes_create_read_open_and_search_deterministically(tmp_path):
@@ -179,6 +241,77 @@ def test_planner_routes_create_read_open_and_search_deterministically(tmp_path):
             "max_results": 5,
         },
     }
+    assert planner.create_plan(
+        "liste os arquivos txt nesta pasta",
+        context=context,
+    )["arguments"]["root"] == str(tmp_path)
+
+
+def test_missing_files_search_root_is_bound_before_registry_validation(
+    tmp_path,
+):
+    (tmp_path / "notes.txt").write_text("ok", encoding="utf-8")
+    agent = AssistantAgent(
+        planner=StaticPlanner(
+            {
+                "mode": "action",
+                "capability": "files.search",
+                "arguments": {"pattern": "*.txt"},
+            }
+        ),
+        executor=ActionExecutor(),
+        memory=build_memory(tmp_path),
+        capability_registry=build_default_registry(),
+    )
+
+    response = agent.handle("liste os arquivos txt nesta pasta")
+
+    assert response["ok"] is True
+    assert str(tmp_path / "notes.txt") in response["message"]
+
+
+def test_planner_supports_file_listing_verbs_without_explicit_location(
+    tmp_path,
+):
+    planner = Planner(llm_client=FailIfCalledClient())
+
+    for prompt in (
+        "listar arquivos txt",
+        "mostre os arquivos txt",
+        "quais arquivos txt",
+    ):
+        plan = planner.create_plan(
+            prompt,
+            context={"default_search_root": str(tmp_path)},
+        )
+        assert plan["capability"] == "files.search"
+        assert plan["arguments"]["root"] == str(tmp_path)
+
+
+def test_no_execution_guard_returns_plan_without_planning_or_execution(
+    tmp_path,
+):
+    class FailPlanner:
+        def create_plan(self, *_args, **_kwargs):
+            raise AssertionError("planner must not run")
+
+    agent = AssistantAgent(
+        planner=FailPlanner(),
+        executor=FailIfCalledExecutor(),
+        memory=build_memory(tmp_path),
+        capability_registry=build_default_registry(),
+        capability_provisioning_service=build_provisioning_service(tmp_path),
+    )
+
+    response = agent.handle(
+        "sem executar nada, qual seria o plano para mover arquivos txt "
+        "para uma pasta backup?"
+    )
+
+    assert response["ok"] is True
+    assert response["status"] == "completed"
+    assert "Plano conceitual" in response["message"]
+    assert not (tmp_path / "drafts").exists()
 
 
 def test_delete_dry_run_lists_candidates_without_deleting(tmp_path):
@@ -225,6 +358,56 @@ def test_policy_uses_canonical_capability_contracts():
     assert decide_policy("does.not.exist", registry=registry) == "blocked"
 
 
+def test_dynamic_read_only_tool_uses_allow_policy(tmp_path):
+    from tests.tools.test_state_catalog import create_installed_tool
+    from assistant.tools.catalog import ToolCatalog
+    from assistant.tools.state import hash_tool_files
+
+    tool_dir = create_installed_tool(
+        tmp_path / "tools",
+        name="file.metadata.stat",
+    )
+    store = ToolStateStore(tmp_path / "state.json")
+    store.register_draft(
+        "file.metadata.stat",
+        "1.0.0",
+        hash_tool_files(tool_dir),
+    )
+    for state in ("validating", "validated", "approved", "installed", "enabled"):
+        store.transition("file.metadata.stat", "1.0.0", state)
+    registry = build_default_registry(
+        ToolCatalog(tmp_path / "tools", store)
+    )
+
+    assert registry.resolve("file.metadata.stat").policy == "allow"
+
+
+def test_dynamic_environment_tool_requires_confirmation_even_without_io_permissions(
+    tmp_path,
+):
+    from tests.tools.test_state_catalog import create_installed_tool
+    from assistant.tools.catalog import ToolCatalog
+    from assistant.tools.state import hash_tool_files
+
+    tool_dir = create_installed_tool(
+        tmp_path / "tools",
+        name="local.windows.env_set_user",
+    )
+    store = ToolStateStore(tmp_path / "state.json")
+    store.register_draft(
+        "local.windows.env_set_user",
+        "1.0.0",
+        hash_tool_files(tool_dir),
+    )
+    for state in ("validating", "validated", "approved", "installed", "enabled"):
+        store.transition("local.windows.env_set_user", "1.0.0", state)
+    registry = build_default_registry(
+        ToolCatalog(tmp_path / "tools", store)
+    )
+
+    assert registry.resolve("local.windows.env_set_user").policy == "confirm"
+
+
 def test_shell_request_is_unsupported_without_confirmation(tmp_path):
     agent = AssistantAgent(
         planner=Planner(llm_client=FailIfCalledClient()),
@@ -238,6 +421,256 @@ def test_shell_request_is_unsupported_without_confirmation(tmp_path):
     assert response["ok"] is False
     assert response["error_code"] == "unsupported_capability"
     assert "confirmation" not in response
+
+
+def test_shell_gap_stays_unsupported_when_provisioning_is_available(tmp_path):
+    agent = AssistantAgent(
+        planner=Planner(llm_client=FailIfCalledClient()),
+        executor=FailIfCalledExecutor(),
+        memory=build_memory(tmp_path),
+        capability_registry=build_default_registry(),
+        capability_provisioning_service=build_provisioning_service(tmp_path),
+        recovery_engine=RecoveryEngine(
+            repository=RecoveryRepository(tmp_path / "recovery.jsonl")
+        ),
+    )
+
+    response = agent.handle("rode o comando git status")
+
+    assert response["status"] == "completed"
+    assert response["error_code"] == "unsupported_capability"
+    assert "confirmation" not in response
+    assert not (tmp_path / "drafts").exists()
+
+
+def test_explicit_provisioning_proposal_creates_draft_without_retry(tmp_path):
+    service = build_provisioning_service(tmp_path)
+    agent = AssistantAgent(
+        planner=Planner(llm_client=FailIfCalledClient()),
+        executor=FailIfCalledExecutor(),
+        memory=build_memory(tmp_path),
+        capability_registry=build_default_registry(),
+        capability_provisioning_service=service,
+    )
+    proposal = service.propose(
+        requested_capability="shell.run",
+        user_goal="rode o comando git status",
+        arguments={"command": "git status"},
+        platform_context={"platform": "win32"},
+        original_action={
+            "mode": "action",
+            "capability": "shell.run",
+            "arguments": {"command": "git status"},
+            "context": {"current_cwd": str(tmp_path)},
+        },
+    )
+
+    response = agent.execute_confirmed_action(
+        "tool.provision_draft",
+        proposal.model_dump(),
+        approved=True,
+    )
+
+    assert response["ok"] is False
+    assert response["status"] == "waiting_confirmation"
+    assert response["error_code"] == "capability_gap"
+    assert response["confirmation"]["capability"] == (
+        "tool.approve_install_enable"
+    )
+    original_action = response["confirmation"]["arguments"][
+        "original_action"
+    ]
+    assert original_action["capability"] == "shell.run"
+    assert original_action["arguments"] == {"command": "git status"}
+    assert original_action["context"]["current_cwd"] == str(tmp_path)
+
+
+def test_approved_tool_lifecycle_requests_registry_reload(tmp_path):
+    service = build_provisioning_service(tmp_path)
+    agent = AssistantAgent(
+        planner=Planner(llm_client=FailIfCalledClient()),
+        executor=FailIfCalledExecutor(),
+        memory=build_memory(tmp_path),
+        capability_registry=build_default_registry(),
+        capability_provisioning_service=service,
+    )
+    proposal = agent.handle(
+        "configure uma variável de ambiente chamada TESTE com valor 456"
+    )
+    draft = agent.execute_confirmed_action(
+        proposal["confirmation"]["capability"],
+        proposal["confirmation"]["arguments"],
+        approved=True,
+    )
+
+    response = agent.execute_confirmed_action(
+        draft["confirmation"]["capability"],
+        draft["confirmation"]["arguments"],
+        approved=True,
+    )
+
+    assert response["status"] == "registry_reload_required"
+    assert response["reload"]["tool_name"] == (
+        "local.windows.env_set_user"
+    )
+    assert response["reload"]["original_action"]["capability"] == (
+        "modify_environment_variable"
+    )
+
+
+def test_fresh_agent_prepares_original_environment_action_for_confirmation(
+    tmp_path,
+):
+    calls = []
+
+    service = build_provisioning_service(tmp_path)
+    proposal = service.propose(
+        requested_capability="windows.env.set_user",
+        user_goal="configure TESTE com valor 456",
+        arguments={"name": "TESTE", "value": "456"},
+        platform_context={"platform": "win32"},
+        original_action={
+            "mode": "action",
+            "capability": "modify_environment_variable",
+            "arguments": {
+                "name": "TESTE",
+                "value": "456",
+                "scope": "user",
+            },
+        },
+    )
+    draft = service.create_draft(proposal)
+    enabled = service.approve_install_enable(
+        proposal=proposal,
+        draft_path=draft.path,
+    )
+
+    from assistant.capabilities.registry import CapabilityRegistry, Capability
+    from assistant.capabilities.registry import ActionSchema
+
+    class EnvAction(ActionSchema):
+        name: str
+        value: str
+
+    registry = CapabilityRegistry(
+        build_default_registry().list_all()
+        + [
+            Capability(
+                name="local.windows.env_set_user",
+                description="test",
+                schema=EnvAction,
+                policy="confirm",
+            )
+        ]
+    )
+    agent = AssistantAgent(
+        planner=Planner(llm_client=FailIfCalledClient()),
+        executor=type(
+            "RecordingExecutor",
+            (),
+            {
+                "execute": lambda self, capability, arguments: calls.append(
+                    (capability, arguments)
+                )
+            },
+        )(),
+        memory=build_memory(tmp_path),
+        capability_registry=registry,
+        capability_provisioning_service=service,
+    )
+
+    response = agent.prepare_provisioned_retry(enabled.model_dump())
+
+    assert response["status"] == "waiting_confirmation"
+    assert response["confirmation"]["capability"] == (
+        "local.windows.env_set_user"
+    )
+    assert response["confirmation"]["arguments"] == {
+        "name": "TESTE",
+        "value": "456",
+    }
+    assert calls == []
+
+
+def test_environment_gap_proposes_windows_user_tool(tmp_path):
+    agent = AssistantAgent(
+        planner=Planner(llm_client=FailIfCalledClient()),
+        executor=FailIfCalledExecutor(),
+        memory=build_memory(tmp_path),
+        capability_registry=build_default_registry(),
+        capability_provisioning_service=build_provisioning_service(tmp_path),
+    )
+
+    response = agent.handle(
+        "configure uma variável de ambiente chamada ARGOS_TESTE_NOVA "
+        "com valor 456"
+    )
+
+    assert response["status"] == "waiting_confirmation"
+    assert response["error_code"] == "capability_gap"
+    proposal = response["confirmation"]["arguments"]
+    assert proposal["requested_capability"] == (
+        "modify_environment_variable"
+    )
+    assert proposal["definition"]["name"] == (
+        "local.windows.env_set_user"
+    )
+    assert proposal["requested_capability"] != "file.write"
+
+
+def test_environment_variable_intent_never_falls_back_to_file_write(
+    tmp_path,
+):
+    calls = []
+
+    class RecordingExecutor:
+        def execute(self, capability_name, arguments):
+            calls.append((capability_name, arguments))
+            raise AssertionError("capability gap must not execute fallback")
+
+    agent = AssistantAgent(
+        planner=Planner(llm_client=FailIfCalledClient()),
+        executor=RecordingExecutor(),
+        memory=build_memory(tmp_path),
+        capability_registry=build_default_registry(),
+        capability_provisioning_service=build_provisioning_service(tmp_path),
+    )
+
+    response = agent.handle(
+        "configure uma variável de ambiente chamada ARGOS_TESTE_NOVA "
+        "com valor 456"
+    )
+
+    assert response["confirmation"]["arguments"][
+        "requested_capability"
+    ] == "modify_environment_variable"
+    assert response["confirmation"]["arguments"]["definition"]["name"] == (
+        "local.windows.env_set_user"
+    )
+    assert calls == []
+
+
+def test_destructive_shell_gap_does_not_propose_tool(tmp_path):
+    agent = AssistantAgent(
+        planner=StaticPlanner(
+            {
+                "mode": "action",
+                "capability": "shell.run",
+                "arguments": {"command": "rm -rf ."},
+            }
+        ),
+        executor=FailIfCalledExecutor(),
+        memory=build_memory(tmp_path),
+        capability_registry=build_default_registry(),
+        capability_provisioning_service=build_provisioning_service(tmp_path),
+    )
+
+    response = agent.handle("apague tudo")
+
+    assert response["status"] == "completed"
+    assert response["error_code"] == "policy_blocked"
+    assert "confirmation" not in response
+    assert not (tmp_path / "drafts").exists()
 
 
 def test_move_txt_files_is_not_confused_with_path_environment(tmp_path):
