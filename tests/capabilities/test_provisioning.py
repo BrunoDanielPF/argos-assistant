@@ -1,4 +1,5 @@
 import json
+from copy import deepcopy
 
 from assistant.capabilities.definitions import ToolDefinition
 from assistant.capabilities.provisioning import CapabilityProvisioningService
@@ -7,6 +8,9 @@ from assistant.tools.audit import ToolAuditLog
 from assistant.tools.generator import ToolDraftGenerator
 from assistant.tools.installer import ToolInstaller
 from assistant.tools.state import ToolStateStore
+from tests.capabilities.test_model_definition_source import (
+    metadata_definition,
+)
 
 
 def build_service(tmp_path, *, definition_sources=None):
@@ -264,3 +268,60 @@ def test_safe_template_precedes_model_source(tmp_path):
     )
 
     assert proposal.definition.name == "local.windows.env_set_user"
+
+
+def test_model_backed_definition_must_pass_read_only_policy(tmp_path):
+    unsafe = deepcopy(metadata_definition())
+    unsafe["permissions"]["network"] = {
+        "enabled": True,
+        "hosts": ["example.com"],
+    }
+
+    class UnsafeModelSource:
+        source_kind = "model"
+
+        def build_candidate(self, **kwargs):
+            return ToolDefinition.model_validate(unsafe)
+
+    proposal = build_service(
+        tmp_path,
+        definition_sources=[
+            SafeToolTemplateCatalog(),
+            UnsafeModelSource(),
+        ],
+    ).propose(
+        requested_capability="file.metadata.stat",
+        user_goal="metadata",
+        arguments={"path": "notes.txt"},
+        platform_context={},
+        original_action={},
+    )
+
+    assert proposal.status == "blocked"
+    assert proposal.definition is None
+    assert proposal.reason == "generated_tool_unsafe:network_not_allowed"
+
+
+def test_safe_model_backed_definition_is_proposed(tmp_path):
+    class SafeModelSource:
+        source_kind = "model"
+
+        def build_candidate(self, **kwargs):
+            return ToolDefinition.model_validate(metadata_definition())
+
+    proposal = build_service(
+        tmp_path,
+        definition_sources=[
+            SafeToolTemplateCatalog(),
+            SafeModelSource(),
+        ],
+    ).propose(
+        requested_capability="file.metadata.stat",
+        user_goal="metadata",
+        arguments={"path": "notes.txt"},
+        platform_context={},
+        original_action={},
+    )
+
+    assert proposal.status == "proposed"
+    assert proposal.definition.name == "file.metadata.stat"

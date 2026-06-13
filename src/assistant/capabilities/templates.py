@@ -19,6 +19,8 @@ class ToolDefinitionSource(Protocol):
 
 
 class SafeToolTemplateCatalog:
+    source_kind = "template"
+
     def build_candidate(
         self,
         *,

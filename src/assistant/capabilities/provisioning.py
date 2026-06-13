@@ -7,6 +7,9 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 from assistant.capabilities.definitions import ToolDefinition
+from assistant.capabilities.generated_tool_policy import (
+    GeneratedToolSafetyPolicy,
+)
 from assistant.capabilities.templates import (
     SafeToolTemplateCatalog,
     ToolDefinitionSource,
@@ -68,6 +71,7 @@ class CapabilityProvisioningService:
         installer: ToolInstaller,
         audit_log: ToolAuditLog | None = None,
         definition_sources: list[ToolDefinitionSource] | None = None,
+        generated_tool_policy: GeneratedToolSafetyPolicy | None = None,
     ) -> None:
         self._generator = generator
         self._state_store = state_store
@@ -77,6 +81,9 @@ class CapabilityProvisioningService:
             list(definition_sources)
             if definition_sources is not None
             else [SafeToolTemplateCatalog()]
+        )
+        self._generated_tool_policy = (
+            generated_tool_policy or GeneratedToolSafetyPolicy()
         )
 
     def propose(
@@ -109,6 +116,23 @@ class CapabilityProvisioningService:
                 original_action=original_action,
             )
             if definition is not None:
+                if getattr(source, "source_kind", None) == "model":
+                    decision = self._generated_tool_policy.evaluate(
+                        definition
+                    )
+                    if not decision.allowed:
+                        return CapabilityProvisioningProposal(
+                            status="blocked",
+                            requested_capability=requested_capability,
+                            user_goal=user_goal,
+                            arguments=arguments,
+                            platform_context=platform_context,
+                            original_action=original_action,
+                            reason=(
+                                "generated_tool_unsafe:"
+                                + ",".join(decision.reasons)
+                            ),
+                        )
                 break
         if definition is None:
             return CapabilityProvisioningProposal(

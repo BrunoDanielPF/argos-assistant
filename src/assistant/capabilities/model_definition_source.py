@@ -7,6 +7,8 @@ from assistant.workflows.redaction import redact_sensitive
 
 
 class ModelBackedToolDefinitionSource:
+    source_kind = "model"
+
     def __init__(self, llm_client) -> None:
         self._llm_client = llm_client
 
