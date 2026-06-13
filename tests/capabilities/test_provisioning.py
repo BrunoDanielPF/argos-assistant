@@ -187,6 +187,32 @@ def test_explicit_lifecycle_approval_installs_and_enables_tool(tmp_path):
     ]
 
 
+def test_duplicate_approval_reuses_enabled_installation(tmp_path):
+    service = build_service(tmp_path)
+    proposal = service.propose(
+        requested_capability="windows.env.set_user",
+        user_goal="configure TESTE com valor 456",
+        arguments={"name": "TESTE", "value": "456"},
+        platform_context={"platform": "win32"},
+        original_action={
+            "capability": "windows.env.set_user",
+            "arguments": {"name": "TESTE", "value": "456"},
+        },
+    )
+    draft = service.create_draft(proposal)
+
+    first = service.approve_install_enable(
+        proposal=proposal,
+        draft_path=draft.path,
+    )
+    second = service.approve_install_enable(
+        proposal=proposal,
+        draft_path=draft.path,
+    )
+
+    assert second == first
+
+
 def test_rejected_lifecycle_keeps_validated_draft(tmp_path):
     service = build_service(tmp_path)
     proposal = service.propose(

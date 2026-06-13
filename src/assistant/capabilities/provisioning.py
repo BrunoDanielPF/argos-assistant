@@ -197,6 +197,24 @@ class CapabilityProvisioningService:
             definition.name,
             definition.version,
         )
+        installed_path = self._installer.installed_path(
+            definition.name,
+            definition.version,
+        )
+        if (
+            record is not None
+            and record.state == "enabled"
+            and installed_path.is_dir()
+        ):
+            return EnabledProvisionedTool(
+                proposal_id=proposal.proposal_id,
+                tool_name=definition.name,
+                tool_version=definition.version,
+                state="enabled",
+                installed_path=installed_path,
+                original_action=proposal.original_action,
+                permissions=definition.permissions,
+            )
         if record is None or record.state != "validated":
             raise ValueError(
                 f"{definition.name}@{definition.version} is not validated"

@@ -30,6 +30,9 @@ class ToolInstaller:
         self._create_environment = create_environment
         self._command_runner = command_runner or self._run_command
 
+    def installed_path(self, name: str, version: str) -> Path:
+        return self._tools_root / name / version
+
     def install(self, source_dir: Path) -> Path:
         source_dir = Path(source_dir)
         manifest = load_tool_manifest(source_dir)
@@ -37,7 +40,7 @@ class ToolInstaller:
         if record is None or record.state != "approved":
             raise ToolApprovalRequired(f"{manifest.name}@{manifest.version}")
 
-        target = self._tools_root / manifest.name / manifest.version
+        target = self.installed_path(manifest.name, manifest.version)
         if target.exists():
             raise FileExistsError(target)
         target.parent.mkdir(parents=True, exist_ok=True)

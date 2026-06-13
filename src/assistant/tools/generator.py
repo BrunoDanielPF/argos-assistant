@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from hashlib import sha256
 import json
 from pathlib import Path
 import re
@@ -33,9 +34,34 @@ class ToolDraftGenerator:
         if not isinstance(name, str) or not self._name_pattern.fullmatch(name):
             raise InvalidToolName(str(name))
         draft_dir = self._drafts_root / name / version
+        definition_hash = sha256(
+            json.dumps(
+                definition,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
         if draft_dir.exists():
+            hash_file = draft_dir / ".definition-hash"
+            record = self._state_store.get(name, version)
+            if (
+                hash_file.is_file()
+                and hash_file.read_text(encoding="ascii").strip()
+                == definition_hash
+                and record is not None
+                and record.state == "validated"
+            ):
+                return GeneratedToolDraft(
+                    path=draft_dir,
+                    state=record.state,
+                )
             raise FileExistsError(draft_dir)
         draft_dir.mkdir(parents=True)
+        (draft_dir / ".definition-hash").write_text(
+            definition_hash,
+            encoding="ascii",
+        )
         manifest = {
             "schema_version": "1.0",
             "name": name,

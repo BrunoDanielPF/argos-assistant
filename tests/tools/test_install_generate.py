@@ -39,6 +39,46 @@ def test_generator_creates_inactive_validated_draft(tmp_path):
     assert (draft.path / "validation-report.json").exists()
 
 
+def test_generator_reuses_equivalent_validated_draft(tmp_path):
+    state = ToolStateStore(tmp_path / "tool-state.json")
+    generator = ToolDraftGenerator(tmp_path / "drafts", state)
+    definition = {
+        "name": "local.generated.echo",
+        "version": "1.0.0",
+        "handler_body": "def run(arguments):\n    return arguments\n",
+    }
+
+    first = generator.generate(definition)
+    second = generator.generate(definition)
+
+    assert second == first
+    assert state.get("local.generated.echo", "1.0.0").state == "validated"
+
+
+def test_generator_rejects_same_version_with_different_definition(tmp_path):
+    state = ToolStateStore(tmp_path / "tool-state.json")
+    generator = ToolDraftGenerator(tmp_path / "drafts", state)
+    generator.generate(
+        {
+            "name": "local.generated.echo",
+            "version": "1.0.0",
+            "handler_body": "def run(arguments):\n    return arguments\n",
+        }
+    )
+
+    with pytest.raises(FileExistsError):
+        generator.generate(
+            {
+                "name": "local.generated.echo",
+                "version": "1.0.0",
+                "handler_body": (
+                    "def run(arguments):\n"
+                    "    return {'changed': True}\n"
+                ),
+            }
+        )
+
+
 def test_generator_rejects_invalid_name(tmp_path):
     generator = ToolDraftGenerator(
         tmp_path / "drafts",
