@@ -1,13 +1,15 @@
 import json
 
+from assistant.capabilities.definitions import ToolDefinition
 from assistant.capabilities.provisioning import CapabilityProvisioningService
+from assistant.capabilities.templates import SafeToolTemplateCatalog
 from assistant.tools.audit import ToolAuditLog
 from assistant.tools.generator import ToolDraftGenerator
 from assistant.tools.installer import ToolInstaller
 from assistant.tools.state import ToolStateStore
 
 
-def build_service(tmp_path):
+def build_service(tmp_path, *, definition_sources=None):
     state_store = ToolStateStore(tmp_path / "tool-state.json")
     return CapabilityProvisioningService(
         generator=ToolDraftGenerator(
@@ -22,6 +24,7 @@ def build_service(tmp_path):
             create_environment=False,
         ),
         audit_log=ToolAuditLog(tmp_path / "tools-audit.jsonl"),
+        definition_sources=definition_sources,
     )
 
 
@@ -54,6 +57,7 @@ def test_shell_git_status_proposes_narrow_local_tool(tmp_path):
     assert definition["permissions"]["subprocess"]["executables"] == ["git"]
     assert "shell=True" not in definition["handler_body"]
     assert "arguments['command']" not in definition["handler_body"]
+    assert proposal.tool_definition_hash
 
 
 def test_windows_user_environment_proposes_no_shell_or_network(tmp_path):
@@ -197,3 +201,66 @@ def test_rejected_lifecycle_keeps_validated_draft(tmp_path):
         "validated"
     )
     assert not (tmp_path / "tools").exists()
+
+
+def test_definition_hash_is_stable_for_equivalent_definitions(tmp_path):
+    source_definition = SafeToolTemplateCatalog().build_candidate(
+        requested_capability="windows.env.set_user",
+        user_goal="configure TESTE",
+        arguments={"name": "TESTE", "value": "456"},
+        platform_context={"platform": "win32"},
+        original_action={},
+    )
+
+    class StaticSource:
+        def build_candidate(self, **kwargs):
+            return ToolDefinition.model_validate(
+                source_definition.model_dump()
+            )
+
+    first = build_service(
+        tmp_path / "first",
+        definition_sources=[StaticSource()],
+    ).propose(
+        requested_capability="custom.read",
+        user_goal="read",
+        arguments={},
+        platform_context={},
+        original_action={},
+    )
+    second = build_service(
+        tmp_path / "second",
+        definition_sources=[StaticSource()],
+    ).propose(
+        requested_capability="custom.read",
+        user_goal="read",
+        arguments={},
+        platform_context={},
+        original_action={},
+    )
+
+    assert first.tool_definition_hash == second.tool_definition_hash
+
+
+def test_safe_template_precedes_model_source(tmp_path):
+    class FailIfCalledSource:
+        def build_candidate(self, **kwargs):
+            raise AssertionError("model source must not run for safe template")
+
+    service = build_service(
+        tmp_path,
+        definition_sources=[
+            SafeToolTemplateCatalog(),
+            FailIfCalledSource(),
+        ],
+    )
+
+    proposal = service.propose(
+        requested_capability="windows.env.set_user",
+        user_goal="configure TESTE com valor 456",
+        arguments={"name": "TESTE", "value": "456"},
+        platform_context={"platform": "win32"},
+        original_action={},
+    )
+
+    assert proposal.definition.name == "local.windows.env_set_user"

@@ -6,36 +6,21 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from assistant.capabilities.definitions import ToolDefinition
+from assistant.capabilities.templates import (
+    SafeToolTemplateCatalog,
+    ToolDefinitionSource,
+)
 from assistant.tools.audit import ToolAuditEvent, ToolAuditLog
 from assistant.tools.generator import GeneratedToolDraft, ToolDraftGenerator
 from assistant.tools.installer import ToolInstaller
-from assistant.tools.models import ToolExecution, ToolPermissions
+from assistant.tools.models import ToolPermissions
 from assistant.tools.state import ToolStateStore
 from assistant.workflows.policies import is_destructive_shell_command
 
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
-
-class ToolDefinition(StrictModel):
-    name: str = Field(pattern=r"^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9_]*)+$")
-    version: str = Field(
-        default="1.0.0",
-        pattern=r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$",
-    )
-    title: str = Field(min_length=1, max_length=120)
-    description: str = Field(min_length=1, max_length=1000)
-    input_schema: dict
-    output_schema: dict
-    permissions: ToolPermissions = Field(default_factory=ToolPermissions)
-    execution: ToolExecution = Field(
-        default_factory=lambda: ToolExecution(
-            timeout_seconds=30,
-            max_output_bytes=65_536,
-        )
-    )
-    handler_body: str = Field(min_length=1)
 
 
 class CapabilityProvisioningProposal(StrictModel):
@@ -47,6 +32,7 @@ class CapabilityProvisioningProposal(StrictModel):
     platform_context: dict = Field(default_factory=dict)
     original_action: dict = Field(default_factory=dict)
     definition: ToolDefinition | None = None
+    tool_definition_hash: str | None = None
     reason: str | None = None
 
     @property
@@ -81,11 +67,17 @@ class CapabilityProvisioningService:
         state_store: ToolStateStore,
         installer: ToolInstaller,
         audit_log: ToolAuditLog | None = None,
+        definition_sources: list[ToolDefinitionSource] | None = None,
     ) -> None:
         self._generator = generator
         self._state_store = state_store
         self._installer = installer
         self._audit_log = audit_log
+        self._definition_sources = (
+            list(definition_sources)
+            if definition_sources is not None
+            else [SafeToolTemplateCatalog()]
+        )
 
     def propose(
         self,
@@ -107,11 +99,17 @@ class CapabilityProvisioningService:
                 reason="destructive_action",
             )
 
-        definition = self._build_definition(
-            requested_capability=requested_capability,
-            arguments=arguments,
-            platform_context=platform_context,
-        )
+        definition = None
+        for source in self._definition_sources:
+            definition = source.build_candidate(
+                requested_capability=requested_capability,
+                user_goal=user_goal,
+                arguments=arguments,
+                platform_context=platform_context,
+                original_action=original_action,
+            )
+            if definition is not None:
+                break
         if definition is None:
             return CapabilityProvisioningProposal(
                 status="unsupported",
@@ -131,6 +129,7 @@ class CapabilityProvisioningService:
             platform_context=platform_context,
             original_action=original_action,
             definition=definition,
+            tool_definition_hash=definition.definition_hash(),
         )
         self._audit("draft_proposed", proposal)
         return proposal
@@ -284,28 +283,6 @@ class CapabilityProvisioningService:
         )
         return summary
 
-    def _build_definition(
-        self,
-        *,
-        requested_capability: str,
-        arguments: dict,
-        platform_context: dict,
-    ) -> ToolDefinition | None:
-        if requested_capability == "shell.run":
-            command = arguments.get("command")
-            if (
-                isinstance(command, str)
-                and " ".join(command.casefold().split()) == "git status"
-            ):
-                return self._git_status_definition(platform_context)
-            return None
-        if requested_capability in {
-            "modify_environment_variable",
-            "windows.env.set_user",
-        }:
-            return self._windows_env_definition()
-        return None
-
     def _is_destructive(
         self,
         requested_capability: str,
@@ -320,120 +297,6 @@ class CapabilityProvisioningService:
         return (
             requested_capability == "shell.run"
             and is_destructive_shell_command(arguments.get("command"))
-        )
-
-    @staticmethod
-    def _git_status_definition(platform_context: dict) -> ToolDefinition:
-        return ToolDefinition(
-            name="local.git.status",
-            title="Git Status",
-            description=(
-                "Executa somente git status em um diretorio local informado."
-            ),
-            input_schema={
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["cwd"],
-                "properties": {
-                    "cwd": {"type": "string", "minLength": 1},
-                },
-            },
-            output_schema={
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["returncode", "stdout", "stderr"],
-                "properties": {
-                    "returncode": {"type": "integer"},
-                    "stdout": {"type": "string"},
-                    "stderr": {"type": "string"},
-                },
-            },
-            permissions=ToolPermissions.model_validate(
-                {
-                    "filesystem": {
-                        "read": ["${cwd}/**"],
-                        "write": [],
-                    },
-                    "network": {"enabled": False, "hosts": []},
-                    "subprocess": {"executables": ["git"]},
-                }
-            ),
-            execution=ToolExecution(
-                timeout_seconds=15,
-                max_output_bytes=65_536,
-            ),
-            handler_body=(
-                "import subprocess\n\n"
-                "def run(arguments):\n"
-                "    completed = subprocess.run(\n"
-                "        ['git', 'status'],\n"
-                "        cwd=arguments.get('cwd'),\n"
-                "        check=False,\n"
-                "        capture_output=True,\n"
-                "        text=True,\n"
-                "        shell=False,\n"
-                "    )\n"
-                "    return {\n"
-                "        'returncode': completed.returncode,\n"
-                "        'stdout': completed.stdout,\n"
-                "        'stderr': completed.stderr,\n"
-                "    }\n"
-            ),
-        )
-
-    @staticmethod
-    def _windows_env_definition() -> ToolDefinition:
-        return ToolDefinition(
-            name="local.windows.env_set_user",
-            title="Set Windows User Environment Variable",
-            description=(
-                "Define uma variavel de ambiente no escopo do usuario Windows."
-            ),
-            input_schema={
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["name", "value"],
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
-                    },
-                    "value": {"type": "string"},
-                },
-            },
-            output_schema={
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["name", "scope", "updated"],
-                "properties": {
-                    "name": {"type": "string"},
-                    "scope": {"const": "user"},
-                    "updated": {"type": "boolean"},
-                },
-            },
-            permissions=ToolPermissions(),
-            execution=ToolExecution(
-                timeout_seconds=10,
-                max_output_bytes=16_384,
-            ),
-            handler_body=(
-                "import winreg\n\n"
-                "def run(arguments):\n"
-                "    name = arguments['name']\n"
-                "    value = arguments['value']\n"
-                "    with winreg.OpenKey(\n"
-                "        winreg.HKEY_CURRENT_USER,\n"
-                "        'Environment',\n"
-                "        0,\n"
-                "        winreg.KEY_SET_VALUE,\n"
-                "    ) as key:\n"
-                "        winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)\n"
-                "    return {'name': name, 'scope': 'user', 'updated': True}\n"
-            ),
         )
 
     def _audit(
