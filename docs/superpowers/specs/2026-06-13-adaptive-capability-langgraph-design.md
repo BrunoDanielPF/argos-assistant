@@ -39,7 +39,10 @@ runtime reload, and workflow resumption.
 - Do not execute the original action without a separate retry confirmation.
 - Do not treat LangGraph checkpoints as the source of truth for tools,
   approvals, audit, or execution runs.
-- Do not generate arbitrary model-authored tools in this MVP.
+- Do not accept model-authored tools outside the strict read-only safety
+  profile.
+- Do not let the model select policy, approve, install, enable, or execute a
+  tool.
 
 ## Dependencies
 
@@ -126,23 +129,142 @@ Nodes:
 The service remains the domain authority for proposals, drafts, installation,
 enablement, permission summaries, and retry action translation.
 
-For the MVP it receives candidates only from a `SafeToolTemplateCatalog`.
-Allowed templates are:
+Definition sources are evaluated in this order:
+
+1. enabled capability/tool lookup in the active registry and catalog;
+2. `SafeToolTemplateCatalog`;
+3. `ModelBackedToolDefinitionSource`;
+4. runtime schema, policy, permission, and AST gates.
+
+Known templates include:
 
 - exact `git status` -> `local.git.status`;
 - Windows user environment variable update ->
   `local.windows.env_set_user`.
 
-The architecture exposes a `ToolDefinitionSource` protocol. A future
-model-backed source may provide a `ToolDefinition`, but it must pass the same:
+Both proposal sources implement:
 
-- static validation;
-- capability policy;
-- permission allowlist;
-- sandbox preflight;
-- explicit human approval.
+```python
+class ToolDefinitionSource(Protocol):
+    def build_candidate(
+        self,
+        *,
+        requested_capability: str,
+        user_goal: str,
+        arguments: dict,
+        platform_context: dict,
+        original_action: dict,
+    ) -> ToolDefinition | None: ...
+```
 
-No model-backed source is implemented now.
+The first source that produces a candidate wins. A candidate never bypasses
+runtime validation.
+
+### ModelBackedToolDefinitionSource
+
+The model-backed source receives a redacted goal, safe extracted arguments,
+platform context, and the strict `ToolDefinition` JSON Schema. It returns only
+structured JSON and never executes code.
+
+The Ollama request uses the `ToolDefinition` JSON Schema in the `format`
+parameter and includes the same schema in the system prompt. The response is
+then parsed with:
+
+```python
+ToolDefinition.model_validate_json(response_text)
+```
+
+Malformed JSON, unknown fields, missing fields, or extra prose reject the
+candidate.
+
+The prompt requires:
+
+- a single `run(arguments)` Python handler;
+- Python standard library only;
+- no top-level effects;
+- no dependency requirements;
+- read-only behavior;
+- minimum permissions expressed with argument placeholders;
+- closed input and output schemas.
+
+Prompts and raw model responses are not persisted in workflow, checkpoint, or
+audit storage.
+
+### GeneratedToolSafetyPolicy
+
+Model-backed candidates are accepted only when the runtime can prove they are
+strictly read-only:
+
+- `filesystem.write` is empty;
+- `network.enabled` is false and hosts are empty;
+- `subprocess.executables` is empty;
+- `requirements.lock` remains empty;
+- filesystem reads are limited to safe input placeholders such as `${path}`;
+- schemas are valid, closed objects;
+- imports belong to a standard-library allowlist;
+- the module defines no executable top-level behavior;
+- `run(arguments)` contains no file writes, deletes, renames, process calls,
+  network calls, dynamic imports, reflection, environment mutation, registry
+  mutation, or system configuration;
+- calls not explicitly recognized as read-only are rejected fail-closed.
+
+The policy is applied before draft creation and the AST validator is applied
+again to the generated quarantined files. This is automatic creation of a
+validated quarantined draft, not automatic approval. Installation and
+enablement always require a human decision.
+
+Safe templates may have explicitly reviewed effects and are evaluated under
+their template-specific policy. A model-backed candidate may not request
+filesystem write, subprocess, network, shell, environment mutation, or system
+configuration in this MVP.
+
+### File Metadata Example
+
+For a request such as:
+
+```text
+quero que me diga a data de criacao do arquivo X
+```
+
+when no enabled metadata capability exists, the model-backed source may propose
+`file.metadata.stat` or an equivalent canonical name with:
+
+- input: required `path`;
+- output: `path`, `created_at`, `modified_at`, `platform`,
+  `created_at_reliable`, and an optional explanation;
+- permission: `filesystem.read=["${path}"]`;
+- no write, network, subprocess, or dependencies.
+
+The handler uses only `pathlib`, `os`, `platform`, and datetime-related
+standard-library modules. On Windows, `st_ctime` is treated as file creation
+time. On platforms with `st_birthtime`, that value is used. Otherwise,
+`created_at_reliable=false` and the result explains that reliable creation
+metadata is unavailable.
+
+Relative paths are resolved against `current_cwd`, then
+`default_search_root`, before registry validation and execution.
+
+### CapabilityArgumentResolver
+
+`CapabilityArgumentResolver` runs before the first registry validation and
+delegates context binding to `ContextArgumentBinder`.
+
+It:
+
+- preserves explicit arguments;
+- inspects required fields and properties in the capability schema;
+- safely binds path-like fields such as `path`, `root`, `cwd`, and
+  `directory`;
+- uses `current_cwd` or `default_search_root` only when compatible with the
+  field and user request;
+- resolves explicit relative paths against session context;
+- never fills content, commands, secrets, tokens, passwords, environment
+  values, configuration values, or arbitrary strings;
+- never changes a semantically incorrect capability into another capability.
+
+Consequently, an environment-variable request cannot be repaired into
+`file.write`. It must remain an environment capability gap or match its safe
+template.
 
 ### CapabilityWorkflowRepository
 
@@ -278,10 +400,20 @@ The graph pauses in `WAITING_TOOL_APPROVAL` with:
 Resume values use an explicit decision:
 
 ```json
-{"decision": "approve"}
+{"decision": "approve_enable_only"}
+{"decision": "approve_enable_and_run_once"}
 {"decision": "reject"}
 {"decision": "cancel"}
 ```
+
+For read-only eligible tools, the UI presents:
+
+- enable and answer now;
+- enable only;
+- reject;
+- cancel.
+
+For other tools, the run-once option is omitted.
 
 ### Retry Confirmation Interrupt
 
@@ -294,6 +426,36 @@ After enablement and session reload, the graph pauses in
 - explicit retry question.
 
 Only `{"decision": "approve"}` can reach execution.
+
+### Enable and Run Once
+
+`approve_enable_and_run_once` is accepted only when
+`RunOnceEligibilityEvaluator` proves all of the following:
+
+1. tool is strictly read-only;
+2. final policy for the bound original action is `allow`;
+3. filesystem write, network, and subprocess permissions are empty;
+4. the action is not shell, environment mutation, system configuration,
+   destructive, or medium/high risk;
+5. dry-run and permission summaries contain no side effect;
+6. arguments contain no secret;
+7. checkpoint-safe state contains no secret;
+8. retry state is still `pending`.
+
+The runtime re-evaluates eligibility even when the decision arrives directly
+through the API.
+
+If any condition fails, the runtime does not execute. It safely downgrades to
+`approve_enable_only`, emits `run_once_downgraded` with a safe reason, and
+continues to `WAITING_RETRY_CONFIRMATION`.
+
+Accepted run-once execution uses the same compare-and-set retry lifecycle:
+
+```text
+pending -> executing -> executed|failed
+```
+
+Duplicate decisions return the stored result and never execute twice.
 
 ## Automatic Draft Safety
 
@@ -512,6 +674,7 @@ Structured events:
 - `tool_enabled`;
 - `session_registry_reloaded`;
 - `retry_confirmation_pending`;
+- `run_once_downgraded`;
 - `retry_confirmed`;
 - `retry_rejected`;
 - `retry_cancelled`;
@@ -545,6 +708,11 @@ The implementation is accepted when:
 11. missing `files.search.root` is filled before validation;
 12. no-execution requests return text without any action;
 13. all existing tests continue to pass.
+14. a metadata request can produce a read-only model-backed
+    `file.metadata.stat` draft;
+15. model-backed write, network, or subprocess candidates are rejected;
+16. eligible `approve_enable_and_run_once` executes once through retry CAS;
+17. ineligible run-once decisions downgrade to separate retry confirmation.
 
 ## References
 
@@ -554,3 +722,5 @@ The implementation is accepted when:
   <https://docs.langchain.com/oss/python/langgraph/checkpointers>
 - SQLite checkpointer package:
   <https://pypi.org/project/langgraph-checkpoint-sqlite/>
+- Ollama structured outputs:
+  <https://github.com/ollama/ollama/blob/main/docs/capabilities/structured-outputs.mdx>

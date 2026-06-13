@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a durable LangGraph workflow for adaptive capability provisioning while preserving the existing Argos agent, runtime authorities, and explicit approval boundaries.
+**Goal:** Add a durable LangGraph workflow that can create safe-template or model-proposed read-only tool drafts while preserving runtime validation and explicit approval boundaries.
 
-**Architecture:** `AssistantAgent` reports a structured capability gap. `GatewayService` starts and resumes an `AdaptiveCapabilityGraph` backed by `SqliteSaver`, while Argos SQLite repositories remain authoritative for workflow, approval, tool, audit, and execution state. Graph interrupts represent tool approval and retry confirmation; gateway callbacks reload and execute only within the affected session.
+**Architecture:** `AssistantAgent` reports a structured capability gap. The provisioning chain checks enabled tools, safe templates, then a structured-output `ModelBackedToolDefinitionSource`; every candidate passes a fail-closed read-only policy and AST validation before quarantine. `GatewayService` starts and resumes an `AdaptiveCapabilityGraph` backed by `SqliteSaver`, while Argos repositories remain authoritative and retry execution remains CAS-protected.
 
 **Tech Stack:** Python 3.12, LangGraph 1.2, `langgraph-checkpoint-sqlite` 3.1, Pydantic 2, SQLite, FastAPI, Typer, Rich, pytest.
 
@@ -17,6 +17,10 @@
 - `src/assistant/capabilities/adaptive_graph.py`: state, stages, nodes, interrupts, resume API.
 - `src/assistant/capabilities/workflow_repository.py`: authoritative SQLite workflow records, CAS transitions, TTL queries, and tool leases.
 - `src/assistant/capabilities/templates.py`: safe template catalog and future `ToolDefinitionSource` protocol.
+- `src/assistant/capabilities/model_definition_source.py`: structured model proposal source.
+- `src/assistant/capabilities/generated_tool_policy.py`: fail-closed read-only definition and AST gate.
+- `src/assistant/capabilities/arguments.py`: schema-driven argument resolution and context binding.
+- `src/assistant/capabilities/run_once.py`: run-once eligibility and downgrade reasons.
 - `src/assistant/capabilities/redaction.py`: checkpoint-safe capability payload summaries.
 - `src/assistant/capabilities/metrics.py`: injected workflow counter/duration recorder.
 - `src/assistant/intent/no_execution.py`: no-execution detection and conceptual-plan rendering.
@@ -43,6 +47,7 @@
 - `src/assistant/cli_ui.py`: neutral pending rendering.
 - `src/assistant/observability/events.py`: shared normalized sensitive-key checks.
 - `src/assistant/observability/metrics.py`: EventLog-backed capability metric adapter.
+- `src/assistant/llm/ollama_client.py`: JSON-Schema structured output support.
 - existing focused tests under `tests/capabilities`, `tests/gateway`, `tests/runtime`, and `tests`.
 
 ---
@@ -213,13 +218,17 @@ git add src/assistant/capabilities/workflow_repository.py tests/capabilities/tes
 git commit -m "feat: persist capability workflow lifecycle"
 ```
 
-### Task 3: Extract Safe Template Source and Definition Identity
+### Task 3: Build the Definition Source Chain
 
 **Files:**
 
 - Create: `src/assistant/capabilities/templates.py`
+- Create: `src/assistant/capabilities/model_definition_source.py`
 - Modify: `src/assistant/capabilities/provisioning.py`
+- Modify: `src/assistant/llm/ollama_client.py`
 - Modify: `tests/capabilities/test_provisioning.py`
+- Create: `tests/capabilities/test_model_definition_source.py`
+- Modify: `tests/test_ollama_client.py`
 
 - [ ] **Step 1: Write failing template and hash tests**
 
@@ -231,6 +240,9 @@ def test_safe_catalog_maps_windows_user_environment(): ...
 def test_safe_catalog_rejects_generic_shell(): ...
 def test_definition_hash_is_stable_across_key_order(): ...
 def test_proposal_includes_definition_hash(): ...
+def test_model_source_proposes_file_metadata_stat(): ...
+def test_model_source_rejects_extra_prose_or_invalid_json(): ...
+def test_ollama_client_sends_tool_definition_schema_as_format(): ...
 ```
 
 - [ ] **Step 2: Verify RED**
@@ -239,7 +251,7 @@ def test_proposal_includes_definition_hash(): ...
 python -m pytest tests/capabilities/test_provisioning.py -q
 ```
 
-Expected: missing catalog/hash contract.
+Expected: missing catalog, model source, structured output, and hash contracts.
 
 - [ ] **Step 3: Implement the extension boundary**
 
@@ -259,8 +271,40 @@ class SafeToolTemplateCatalog:
     ...
 ```
 
-Move the two existing definitions into the catalog. Do not add a model-backed
-source.
+Move the two existing definitions into the catalog.
+
+Implement:
+
+```python
+class ModelBackedToolDefinitionSource:
+    def __init__(self, llm_client): ...
+
+    def build_candidate(
+        self,
+        *,
+        requested_capability: str,
+        user_goal: str,
+        arguments: dict,
+        platform_context: dict,
+        original_action: dict,
+    ) -> ToolDefinition | None: ...
+```
+
+The source sends redacted context and `ToolDefinition.model_json_schema()` to:
+
+```python
+llm_client.chat_structured(messages, schema)
+```
+
+and validates the raw content with
+`ToolDefinition.model_validate_json(content)`. It never persists prompts or
+responses.
+
+Evaluate sources in order:
+
+```text
+SafeToolTemplateCatalog -> ModelBackedToolDefinitionSource
+```
 
 - [ ] **Step 4: Add canonical definition hashing**
 
@@ -287,11 +331,64 @@ python -m pytest tests/capabilities/test_provisioning.py -q
 - [ ] **Step 6: Commit**
 
 ```powershell
-git add src/assistant/capabilities/templates.py src/assistant/capabilities/provisioning.py tests/capabilities/test_provisioning.py
-git commit -m "refactor: isolate safe capability templates"
+git add src/assistant/capabilities/templates.py src/assistant/capabilities/model_definition_source.py src/assistant/capabilities/provisioning.py src/assistant/llm/ollama_client.py tests/capabilities/test_provisioning.py tests/capabilities/test_model_definition_source.py tests/test_ollama_client.py
+git commit -m "feat: propose structured read-only tool definitions"
 ```
 
-### Task 4: Make Draft Creation Quarantined and Idempotent
+### Task 4: Enforce Generated Tool Read-Only Safety
+
+**Files:**
+
+- Create: `src/assistant/capabilities/generated_tool_policy.py`
+- Modify: `src/assistant/tools/validator.py`
+- Create: `tests/capabilities/test_generated_tool_policy.py`
+- Modify: `tests/tools/test_sdk_foundation.py`
+
+- [ ] **Step 1: Write failing policy tests**
+
+Cover:
+
+```python
+def test_read_only_file_metadata_definition_is_allowed(): ...
+def test_model_definition_with_filesystem_write_is_blocked(): ...
+def test_model_definition_with_network_is_blocked(): ...
+def test_model_definition_with_subprocess_is_blocked(): ...
+def test_unknown_ast_call_is_blocked_fail_closed(): ...
+def test_top_level_effect_is_blocked(): ...
+```
+
+- [ ] **Step 2: Verify RED**
+
+```powershell
+python -m pytest tests/capabilities/test_generated_tool_policy.py tests/tools/test_sdk_foundation.py -q
+```
+
+- [ ] **Step 3: Implement definition-level policy**
+
+Require closed schemas, empty write/network/subprocess permissions, empty
+dependencies, and filesystem reads limited to input placeholders.
+
+- [ ] **Step 4: Strengthen AST validation**
+
+Use an explicit standard-library import allowlist and read-only call allowlist.
+Reject unknown calls, dynamic imports, reflection, mutation APIs, file write
+modes, environment changes, process/network APIs, and executable top-level
+statements.
+
+- [ ] **Step 5: Verify GREEN**
+
+```powershell
+python -m pytest tests/capabilities/test_generated_tool_policy.py tests/tools/test_sdk_foundation.py -q
+```
+
+- [ ] **Step 6: Commit**
+
+```powershell
+git add src/assistant/capabilities/generated_tool_policy.py src/assistant/tools/validator.py tests/capabilities/test_generated_tool_policy.py tests/tools/test_sdk_foundation.py
+git commit -m "feat: enforce read-only generated tool policy"
+```
+
+### Task 5: Make Draft Creation Quarantined and Idempotent
 
 **Files:**
 
@@ -360,7 +457,7 @@ git add src/assistant/tools/generator.py src/assistant/tools/state.py src/assist
 git commit -m "feat: reuse quarantined validated tool drafts"
 ```
 
-### Task 5: Add Checkpoint Redaction
+### Task 6: Add Checkpoint Redaction
 
 **Files:**
 
@@ -418,7 +515,7 @@ git add src/assistant/capabilities/redaction.py src/assistant/observability/even
 git commit -m "fix: redact adaptive capability checkpoints"
 ```
 
-### Task 6: Implement the Adaptive Capability Graph
+### Task 7: Implement the Adaptive Capability Graph
 
 **Files:**
 
@@ -466,13 +563,14 @@ and returns `Command(goto=...)`.
 Cover:
 
 ```python
-Command(resume={"decision": "approve"})
+Command(resume={"decision": "approve_enable_only"})
+Command(resume={"decision": "approve_enable_and_run_once"})
 Command(resume={"decision": "reject"})
 Command(resume={"decision": "cancel"})
 ```
 
-Expected stages are `WAITING_RETRY_CONFIRMATION`, `TOOL_REJECTED`, and
-`TOOL_APPROVAL_CANCELLED`.
+Expected stages include `WAITING_RETRY_CONFIRMATION`, `ACTION_EXECUTED`,
+`TOOL_REJECTED`, and `TOOL_APPROVAL_CANCELLED`.
 
 - [ ] **Step 5: Implement enable, reload, and second interrupt**
 
@@ -496,6 +594,11 @@ duplicate resume that must not call the executor twice.
 Claim retry in `CapabilityWorkflowRepository` before execution. Return the
 stored result when already terminal.
 
+Inject `RunOnceEligibilityEvaluator`. Revalidate every
+`approve_enable_and_run_once` decision after session reload. Ineligible
+decisions emit `run_once_downgraded` and continue to
+`WAITING_RETRY_CONFIRMATION`.
+
 - [ ] **Step 8: Run graph tests**
 
 ```powershell
@@ -509,7 +612,7 @@ git add src/assistant/capabilities/adaptive_graph.py tests/capabilities/test_ada
 git commit -m "feat: orchestrate capability provisioning with langgraph"
 ```
 
-### Task 7: Make Tool Enablement Race-Safe and Idempotent
+### Task 8: Make Tool Enablement Race-Safe and Idempotent
 
 **Files:**
 
@@ -562,7 +665,7 @@ git add src/assistant/capabilities/provisioning.py src/assistant/capabilities/wo
 git commit -m "fix: serialize provisioned tool enablement"
 ```
 
-### Task 8: Formalize Agent and UI Result Contracts
+### Task 9: Formalize Agent and UI Result Contracts
 
 **Files:**
 
@@ -601,6 +704,17 @@ Assert:
 - `success_partial` renders a non-error partial result;
 - only `error` renders the red error panel.
 
+Eligible read-only approvals expose four options:
+
+```text
+approve_enable_and_run_once
+approve_enable_only
+reject
+cancel
+```
+
+Ineligible approvals omit `approve_enable_and_run_once`.
+
 - [ ] **Step 3: Verify RED**
 
 ```powershell
@@ -637,10 +751,11 @@ git add src/assistant/runtime/contracts.py src/assistant/cli_ui.py src/assistant
 git commit -m "feat: distinguish pending and error responses"
 ```
 
-### Task 9: Refactor Agent Gap Output and Fix files.search
+### Task 10: Add Generic Capability Argument Resolution
 
 **Files:**
 
+- Create: `src/assistant/capabilities/arguments.py`
 - Modify: `src/assistant/agent.py`
 - Modify: `src/assistant/planner.py`
 - Modify: `tests/capabilities/test_runtime_contracts.py`
@@ -678,16 +793,26 @@ Use a static planner returning:
 
 Assert registry validation receives `root=current_cwd`.
 
+Add tests proving:
+
+- explicit relative `path` is resolved from `current_cwd`;
+- `root`, `cwd`, and `directory` can bind from safe context;
+- `content`, `command`, `token`, `secret`, environment `value`, and config
+  values are never synthesized;
+- environment-variable intent is never repaired into `file.write`.
+
 - [ ] **Step 4: Verify RED**
 
 ```powershell
 python -m pytest tests/capabilities/test_runtime_contracts.py tests/test_planner.py tests/test_agent.py -q
 ```
 
-- [ ] **Step 5: Implement structured gap and root injection**
+- [ ] **Step 5: Implement structured gap and argument resolver**
 
 Move automatic provisioning out of `AssistantAgent`. Before the first registry
-validation, canonicalize the capability and inject `root` when absent.
+validation, canonicalize the capability and call
+`CapabilityArgumentResolver.resolve(schema, arguments, context, user_input)`.
+The resolver preserves explicit values and binds only safe path-like fields.
 
 - [ ] **Step 6: Expand deterministic search phrases**
 
@@ -703,11 +828,11 @@ python -m pytest tests/capabilities/test_runtime_contracts.py tests/test_planner
 - [ ] **Step 8: Commit**
 
 ```powershell
-git add src/assistant/agent.py src/assistant/planner.py tests/capabilities/test_runtime_contracts.py tests/test_planner.py tests/test_agent.py
-git commit -m "fix: normalize capability gaps and local file search"
+git add src/assistant/capabilities/arguments.py src/assistant/agent.py src/assistant/planner.py tests/capabilities/test_runtime_contracts.py tests/test_planner.py tests/test_agent.py
+git commit -m "fix: bind safe capability arguments before validation"
 ```
 
-### Task 10: Add NoExecutionGuard Before Planning and Execution
+### Task 11: Add NoExecutionGuard Before Planning and Execution
 
 **Files:**
 
@@ -768,7 +893,7 @@ git add src/assistant/intent/no_execution.py src/assistant/planner.py src/assist
 git commit -m "fix: prevent execution for explanation-only requests"
 ```
 
-### Task 11: Coordinate the Graph from GatewayService
+### Task 12: Coordinate the Graph from GatewayService
 
 **Files:**
 
@@ -838,7 +963,7 @@ git add src/assistant/runtime/factory.py src/assistant/gateway/service.py tests/
 git commit -m "feat: coordinate capability graph from gateway"
 ```
 
-### Task 12: Add Explicit Decisions, Pending APIs, CLI, and TTL Cleanup
+### Task 13: Add Explicit Decisions, Pending APIs, CLI, and TTL Cleanup
 
 **Files:**
 
@@ -859,7 +984,8 @@ git commit -m "feat: coordinate capability graph from gateway"
 Support:
 
 ```json
-{"decision": "approve"}
+{"decision": "approve_enable_only"}
+{"decision": "approve_enable_and_run_once"}
 {"decision": "reject"}
 {"decision": "cancel"}
 ```
@@ -945,7 +1071,7 @@ git add src/assistant/runtime/contracts.py src/assistant/sessions/repository.py 
 git commit -m "feat: manage pending capability workflows"
 ```
 
-### Task 13: Add Audit, Metrics, and Secret Regression Coverage
+### Task 14: Add Audit, Metrics, and Secret Regression Coverage
 
 **Files:**
 
@@ -969,6 +1095,7 @@ tool_approval_pending
 tool_approved
 tool_enabled
 session_registry_reloaded
+run_once_downgraded
 retry_confirmation_pending
 retry_confirmed
 capability_action_executed
@@ -1027,7 +1154,7 @@ git add src/assistant/capabilities/metrics.py src/assistant/observability/metric
 git commit -m "feat: audit adaptive capability workflows"
 ```
 
-### Task 14: Complete End-to-End and Regression Verification
+### Task 15: Complete End-to-End and Regression Verification
 
 **Files:**
 
@@ -1051,6 +1178,21 @@ request
 
 Assert `file.write` is never planned or executed.
 
+Add a model-backed metadata flow:
+
+```text
+metadata request
+-> no enabled capability/template
+-> structured file.metadata.stat definition
+-> read-only policy and AST validation
+-> automatic quarantined validated draft
+-> pending approval, not error
+-> approve enable and run once
+-> session reload
+-> one CAS-protected execution
+-> future request reuses enabled capability
+```
+
 - [ ] **Step 2: Add functional regressions**
 
 Cover:
@@ -1063,6 +1205,11 @@ Cover:
 - all requested Portuguese search forms work;
 - no-execution requests return a textual plan without action;
 - destructive shell never creates a draft.
+- model-backed subprocess, network, and filesystem-write definitions are
+  rejected;
+- metadata output includes path, created_at, modified_at, platform, and
+  created_at_reliable;
+- ineligible run-once approval downgrades and records its reason.
 
 - [ ] **Step 3: Run focused suites**
 
