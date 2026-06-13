@@ -67,3 +67,24 @@ def test_confirmation_can_include_dry_run():
     )
 
     assert confirmation.dry_run["action"] == "create_file"
+
+
+def test_validated_draft_is_a_non_error_pending_approval_response():
+    response = AgentResponse(
+        session_id="default",
+        run_id="run-1",
+        ok=True,
+        status="pending_approval",
+        result="pending_approval",
+        workflow_id="workflow-1",
+        workflow_status="WAITING_TOOL_APPROVAL",
+        message="Draft validado.",
+        approval={
+            "tool_name": "file.metadata.stat",
+            "version": "1.0.0",
+            "options": ["approve_enable_only", "reject", "cancel"],
+        },
+    )
+
+    assert response.error_code is None
+    assert response.result == "pending_approval"

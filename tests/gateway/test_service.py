@@ -129,6 +129,152 @@ def test_service_persists_confirmation_without_exposing_full_content(tmp_path):
     repository.close()
 
 
+def test_service_starts_capability_graph_and_returns_pending_approval(
+    tmp_path,
+):
+    class GapAgent:
+        def __init__(self, memory):
+            self.memory = memory
+
+        def handle(self, content):
+            return {
+                "ok": False,
+                "status": "waiting_confirmation",
+                "message": "gap",
+                "suggestions": [],
+                "error_code": "capability_gap",
+                "confirmation": {
+                    "capability": "tool.provision_draft",
+                    "arguments": {
+                        "proposal_id": "proposal-1",
+                        "status": "proposed",
+                        "requested_capability": "file.metadata.stat",
+                        "user_goal": content,
+                        "arguments": {"path": "notes.txt"},
+                        "platform_context": {},
+                        "original_action": {
+                            "mode": "action",
+                            "capability": "file.metadata.stat",
+                            "arguments": {"path": "notes.txt"},
+                        },
+                        "definition": {
+                            "name": "file.metadata.stat",
+                            "version": "1.0.0",
+                            "title": "File Metadata",
+                            "description": "Read metadata.",
+                            "input_schema": {
+                                "type": "object",
+                                "properties": {"path": {"type": "string"}},
+                            },
+                            "output_schema": {"type": "object"},
+                            "permissions": {
+                                "filesystem": {
+                                    "read": ["${path}"],
+                                    "write": [],
+                                },
+                                "network": {
+                                    "enabled": False,
+                                    "hosts": [],
+                                },
+                                "subprocess": {"executables": []},
+                            },
+                            "execution": {
+                                "timeout_seconds": 10,
+                                "max_output_bytes": 16384,
+                            },
+                            "handler_body": (
+                                "def run(arguments):\n"
+                                "    return {'path': arguments['path']}\n"
+                            ),
+                        },
+                        "tool_definition_hash": "hash-1",
+                        "reason": None,
+                    },
+                },
+            }
+
+    class FakeGraph:
+        def __init__(self):
+            self.started = []
+
+        def start_from_proposal(self, **kwargs):
+            self.started.append(kwargs)
+            return {
+                "ok": True,
+                "result": "pending_approval",
+                "status": "WAITING_TOOL_APPROVAL",
+                "workflow_id": "workflow-1",
+                "message": "Draft validado.",
+                "approval": {
+                    "tool_name": "file.metadata.stat",
+                    "version": "1.0.0",
+                },
+                "error_code": None,
+            }
+
+    class GraphFactory:
+        def __init__(self):
+            self.graph = FakeGraph()
+
+        def build_agent(self, memory=None, confirmer=None):
+            return GapAgent(memory or SessionMemory())
+
+        def build_capability_graph(self, **_kwargs):
+            return self.graph
+
+    repository = SessionRepository(tmp_path / "argos.db")
+    factory = GraphFactory()
+    service = GatewayService(factory, repository)
+
+    response = service.handle(
+        AgentRequest(
+            session_id="s1",
+            run_id="run-1",
+            content="data de criacao de notes.txt",
+        )
+    )
+
+    assert response.ok is True
+    assert response.status == "pending_approval"
+    assert response.result == "pending_approval"
+    assert response.workflow_id == "workflow-1"
+    assert len(factory.graph.started) == 1
+    repository.close()
+
+
+def test_service_routes_explicit_workflow_decisions(tmp_path):
+    class FakeGraph:
+        def decide_tool(self, workflow_id, decision):
+            assert (workflow_id, decision) == (
+                "workflow-1",
+                "approve_enable_only",
+            )
+            return {
+                "ok": True,
+                "result": "pending_confirmation",
+                "status": "WAITING_RETRY_CONFIRMATION",
+                "workflow_id": workflow_id,
+                "message": "Confirme o retry.",
+                "error_code": None,
+            }
+
+    class GraphFactory(FakeRuntimeFactory):
+        def build_capability_graph(self, **_kwargs):
+            return FakeGraph()
+
+    repository = SessionRepository(tmp_path / "argos.db")
+    service = GatewayService(GraphFactory(), repository)
+
+    response = service.resolve_capability_tool_decision(
+        "workflow-1",
+        "approve_enable_only",
+    )
+
+    assert response.status == "pending_confirmation"
+    assert response.workflow_status == "WAITING_RETRY_CONFIRMATION"
+    repository.close()
+
+
 def test_service_summarizes_tool_draft_confirmation(tmp_path):
     class ProvisioningAgent:
         def __init__(self, memory):

@@ -8,6 +8,8 @@ from assistant.gateway.auth import LocalTokenStore
 from assistant.runtime.contracts import (
     AgentRequest,
     AgentResponse,
+    CapabilityRetryDecision,
+    CapabilityToolDecision,
     ConfirmationDecision,
 )
 from assistant.sessions.repository import SessionRepository
@@ -91,6 +93,60 @@ def create_gateway_app(
                 status_code=409,
                 detail="Confirmation not found or already resolved",
             ) from exc
+
+    @app.get(
+        "/v1/capability-workflows",
+        dependencies=[Depends(authenticate)],
+    )
+    def capability_workflows(session_id: str | None = None) -> dict:
+        return {
+            "workflows": service.list_capability_workflows(session_id)
+        }
+
+    @app.post(
+        "/v1/capability-workflows/{workflow_id}/tool-decision",
+        response_model=AgentResponse,
+        dependencies=[Depends(authenticate)],
+    )
+    def resolve_tool_decision(
+        workflow_id: str,
+        decision: CapabilityToolDecision,
+    ):
+        try:
+            return service.resolve_capability_tool_decision(
+                workflow_id,
+                decision.decision,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post(
+        "/v1/capability-workflows/{workflow_id}/retry-decision",
+        response_model=AgentResponse,
+        dependencies=[Depends(authenticate)],
+    )
+    def resolve_retry_decision(
+        workflow_id: str,
+        decision: CapabilityRetryDecision,
+    ):
+        try:
+            return service.resolve_capability_retry_decision(
+                workflow_id,
+                decision.decision,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.delete(
+        "/v1/capability-workflows/{workflow_id}",
+        response_model=AgentResponse,
+        dependencies=[Depends(authenticate)],
+    )
+    def cancel_capability_workflow(workflow_id: str):
+        try:
+            return service.cancel_capability_workflow(workflow_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/v1/sessions", dependencies=[Depends(authenticate)])
     def sessions() -> dict:

@@ -93,6 +93,57 @@ class GatewayClient:
                 "Invalid gateway confirmation response"
             ) from exc
 
+    def decide_capability_tool(
+        self,
+        workflow_id: str,
+        decision: str,
+    ) -> AgentResponse:
+        return AgentResponse.model_validate(
+            self._request(
+                "POST",
+                f"/v1/capability-workflows/{workflow_id}/tool-decision",
+                json={"decision": decision},
+            )
+        )
+
+    def decide_capability_retry(
+        self,
+        workflow_id: str,
+        decision: str,
+    ) -> AgentResponse:
+        return AgentResponse.model_validate(
+            self._request(
+                "POST",
+                f"/v1/capability-workflows/{workflow_id}/retry-decision",
+                json={"decision": decision},
+            )
+        )
+
+    def list_capability_workflows(
+        self,
+        session_id: str | None = None,
+    ) -> list[dict]:
+        suffix = f"?session_id={session_id}" if session_id else ""
+        payload = self._request(
+            "GET",
+            f"/v1/capability-workflows{suffix}",
+        )
+        workflows = payload.get("workflows")
+        if not isinstance(workflows, list):
+            raise GatewayProtocolError("Invalid capability workflow response")
+        return workflows
+
+    def cancel_capability_workflow(
+        self,
+        workflow_id: str,
+    ) -> AgentResponse:
+        return AgentResponse.model_validate(
+            self._request(
+                "DELETE",
+                f"/v1/capability-workflows/{workflow_id}",
+            )
+        )
+
     def _request(
         self,
         method: str,

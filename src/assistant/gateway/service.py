@@ -1,6 +1,7 @@
 from threading import Lock, RLock
 from uuid import uuid4
 
+from assistant.capabilities.provisioning import CapabilityProvisioningProposal
 from assistant.memory.session import SessionMemory
 from assistant.observability.events import EventLog
 from assistant.observability.metrics import Timer
@@ -25,8 +26,20 @@ class GatewayService:
         self._agents: dict[str, object] = {}
         self._session_locks: dict[str, RLock] = {}
         self._cache_lock = Lock()
+        self._capability_graph = None
+        if hasattr(runtime_factory, "build_capability_graph"):
+            self._capability_graph = runtime_factory.build_capability_graph(
+                reload_session=self._reload_session_runtime,
+                execute_action=self._execute_workflow_action,
+                audit=self._write_workflow_event,
+            )
 
     def handle(self, request: AgentRequest) -> AgentResponse:
+        if (
+            self._capability_graph is not None
+            and hasattr(self._capability_graph, "cleanup_expired")
+        ):
+            self._capability_graph.cleanup_expired()
         lock = self._get_session_lock(request.session_id)
         with lock:
             agent = self._get_or_create_agent(request)
@@ -52,6 +65,24 @@ class GatewayService:
                 raise
 
             confirmation = None
+            if self._is_capability_draft_proposal(result):
+                proposal = CapabilityProvisioningProposal.model_validate(
+                    result["confirmation"]["arguments"]
+                )
+                workflow_result = self._capability_graph.start_from_proposal(
+                    session_id=request.session_id,
+                    run_id=request.run_id,
+                    proposal=proposal,
+                )
+                self._repository.save(
+                    request.session_id,
+                    agent.memory.snapshot(),
+                )
+                return self._workflow_response(
+                    request.session_id,
+                    request.run_id,
+                    workflow_result,
+                )
             if result.get("status") == "waiting_confirmation":
                 confirmation = self._persist_confirmation(request, result)
 
@@ -86,6 +117,61 @@ class GatewayService:
                 confirmation=confirmation,
                 error_code=result.get("error_code"),
             )
+
+    def resolve_capability_tool_decision(
+        self,
+        workflow_id: str,
+        decision: str,
+    ) -> AgentResponse:
+        if self._capability_graph is None:
+            raise ValueError("Capability workflow is not configured")
+        result = self._capability_graph.decide_tool(
+            workflow_id,
+            decision,
+        )
+        return self._workflow_response(
+            self._workflow_session_id(workflow_id),
+            self._workflow_run_id(workflow_id),
+            result,
+        )
+
+    def resolve_capability_retry_decision(
+        self,
+        workflow_id: str,
+        decision: str,
+    ) -> AgentResponse:
+        if self._capability_graph is None:
+            raise ValueError("Capability workflow is not configured")
+        result = self._capability_graph.decide_retry(
+            workflow_id,
+            decision,
+        )
+        return self._workflow_response(
+            self._workflow_session_id(workflow_id),
+            self._workflow_run_id(workflow_id),
+            result,
+        )
+
+    def list_capability_workflows(
+        self,
+        session_id: str | None = None,
+    ) -> list[dict]:
+        if self._capability_graph is None:
+            return []
+        return self._capability_graph.list_pending(session_id)
+
+    def cancel_capability_workflow(
+        self,
+        workflow_id: str,
+    ) -> AgentResponse:
+        if self._capability_graph is None:
+            raise ValueError("Capability workflow is not configured")
+        result = self._capability_graph.cancel(workflow_id)
+        return self._workflow_response(
+            self._workflow_session_id(workflow_id),
+            self._workflow_run_id(workflow_id),
+            result,
+        )
 
     def resolve_confirmation(
         self,
@@ -239,6 +325,83 @@ class GatewayService:
         agent = self._runtime_factory.build_agent(memory=memory)
         self._agents[session_id] = agent
         return agent
+
+    def _reload_session_runtime(self, session_id: str) -> None:
+        self._agents.pop(session_id, None)
+        self._get_or_create_agent_for_session(session_id)
+
+    def _execute_workflow_action(
+        self,
+        session_id: str,
+        action: dict,
+    ) -> dict:
+        agent = self._get_or_create_agent_for_session(session_id)
+        result = agent.execute_confirmed_action(
+            str(action["capability"]),
+            dict(action.get("arguments") or {}),
+            approved=True,
+        )
+        self._repository.save(session_id, agent.memory.snapshot())
+        return result
+
+    def _write_workflow_event(self, event: str, details: dict) -> None:
+        if self._event_log is None:
+            return
+        self._event_log.write(
+            event,
+            str(details.get("session_id", "capability-workflow")),
+            str(details.get("run_id", details.get("workflow_id", "unknown"))),
+            details,
+        )
+
+    def _is_capability_draft_proposal(self, result: dict) -> bool:
+        if self._capability_graph is None:
+            return False
+        confirmation = result.get("confirmation")
+        return (
+            result.get("error_code") == "capability_gap"
+            and isinstance(confirmation, dict)
+            and confirmation.get("capability") == "tool.provision_draft"
+            and isinstance(confirmation.get("arguments"), dict)
+        )
+
+    def _workflow_session_id(self, workflow_id: str) -> str:
+        repository = getattr(self._capability_graph, "_repository", None)
+        record = repository.load(workflow_id) if repository is not None else None
+        return record.session_id if record is not None else "default"
+
+    def _workflow_run_id(self, workflow_id: str) -> str:
+        repository = getattr(self._capability_graph, "_repository", None)
+        record = repository.load(workflow_id) if repository is not None else None
+        return record.run_id if record is not None else workflow_id
+
+    @staticmethod
+    def _workflow_response(
+        session_id: str,
+        run_id: str,
+        result: dict,
+    ) -> AgentResponse:
+        workflow_status = result["status"]
+        status = {
+            "WAITING_TOOL_APPROVAL": "pending_approval",
+            "WAITING_RETRY_CONFIRMATION": "pending_confirmation",
+            "ACTION_EXECUTED": "success",
+            "ACTION_FAILED": "error",
+        }.get(workflow_status, "success_partial")
+        return AgentResponse(
+            session_id=session_id,
+            run_id=run_id,
+            ok=bool(result["ok"]),
+            status=status,
+            result=result.get("result"),
+            workflow_id=result.get("workflow_id"),
+            workflow_status=workflow_status,
+            message=result["message"],
+            suggestions=result.get("suggestions", []),
+            approval=result.get("approval"),
+            execution_result=result.get("execution_result"),
+            error_code=result.get("error_code"),
+        )
 
     def _persist_confirmation(
         self,

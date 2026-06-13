@@ -119,8 +119,12 @@ class GatewayAgentAdapter:
         response = resolve_gateway_confirmation(self._client, response)
         return {
             "ok": response.ok,
+            "status": getattr(response, "status", "completed"),
             "message": response.message,
             "suggestions": response.suggestions,
+            "result": getattr(response, "result", None),
+            "workflow_id": getattr(response, "workflow_id", None),
+            "approval": getattr(response, "approval", None),
         }
 
 
@@ -314,6 +318,74 @@ def render_gateway_error(exc: GatewayError) -> None:
 
 
 def resolve_gateway_confirmation(client: GatewayClient, response):
+    if (
+        getattr(response, "status", "completed") == "pending_approval"
+        and getattr(response, "workflow_id", None)
+    ):
+        approval = response.approval or {}
+        console.print("Aprovacao de tool necessaria:")
+        console.print(
+            f"Tool: {approval.get('tool_name')}@{approval.get('version')}"
+        )
+        console.print(f"Draft: {approval.get('draft_path')}")
+        permissions = approval.get("permissions")
+        if isinstance(permissions, dict):
+            console.print("Permissoes propostas:")
+            console.print_json(data=permissions)
+        options = approval.get("options") or [
+            "approve_enable_only",
+            "reject",
+            "cancel",
+        ]
+        labels = {
+            "approve_enable_and_run_once": "Habilitar e responder agora",
+            "approve_enable_only": "Habilitar apenas",
+            "reject": "Rejeitar",
+            "cancel": "Cancelar",
+        }
+        for index, option in enumerate(options, start=1):
+            console.print(f"{index}. {labels.get(option, option)}")
+        try:
+            answer = builtins.input("Escolha uma opcao: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            console.print("[PENDING] A aprovacao continua pendente.")
+            return response
+        if not answer.isdigit() or not 1 <= int(answer) <= len(options):
+            console.print("[PENDING] Opcao invalida; aprovacao mantida.")
+            return response
+        response = client.decide_capability_tool(
+            response.workflow_id,
+            options[int(answer) - 1],
+        )
+
+    if (
+        getattr(response, "status", "completed") == "pending_confirmation"
+        and getattr(response, "workflow_id", None)
+    ):
+        approval = response.approval or {}
+        dry_run = approval.get("dry_run")
+        if isinstance(dry_run, dict):
+            console.print("Dry-run da acao original:")
+            console.print(
+                dry_run.get(
+                    "expected_result",
+                    "A acao usaria as permissoes informadas.",
+                )
+            )
+            console.print(f"Risco: {dry_run.get('risk', 'unknown')}")
+        try:
+            answer = builtins.input(
+                "Executar agora a acao original? [s/N]: "
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            console.print("[PENDING] O retry continua pendente.")
+            return response
+        decision = "confirm" if answer in {"y", "yes", "s", "sim"} else "cancel"
+        return client.decide_capability_retry(
+            response.workflow_id,
+            decision,
+        )
+
     if (
         getattr(response, "status", "completed") != "waiting_confirmation"
         or getattr(response, "confirmation", None) is None
@@ -941,8 +1013,12 @@ def chat(
             response = resolve_gateway_confirmation(client, response)
             result = {
                 "ok": response.ok,
+                "status": getattr(response, "status", "completed"),
                 "message": response.message,
                 "suggestions": response.suggestions,
+                "result": getattr(response, "result", None),
+                "workflow_id": getattr(response, "workflow_id", None),
+                "approval": getattr(response, "approval", None),
             }
         render_result(result)
     except GatewayError as exc:

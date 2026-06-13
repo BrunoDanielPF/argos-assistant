@@ -28,12 +28,38 @@ class ConfirmationDecision(StrictModel):
     approved: bool
 
 
+class CapabilityToolDecision(StrictModel):
+    decision: Literal[
+        "approve_enable_only",
+        "approve_enable_and_run_once",
+        "reject",
+        "cancel",
+    ]
+
+
+class CapabilityRetryDecision(StrictModel):
+    decision: Literal["confirm", "reject", "cancel"]
+
+
 class AgentResponse(StrictModel):
     session_id: str
     run_id: str
     ok: bool
-    status: Literal["completed", "waiting_confirmation"] = "completed"
+    status: Literal[
+        "completed",
+        "waiting_confirmation",
+        "success",
+        "success_partial",
+        "pending_confirmation",
+        "pending_approval",
+        "error",
+    ] = "completed"
     message: str
     suggestions: list[dict] = Field(default_factory=list)
     confirmation: ConfirmationRequest | None = None
     error_code: str | None = None
+    result: str | None = None
+    workflow_id: str | None = None
+    workflow_status: str | None = None
+    approval: dict | None = None
+    execution_result: dict | None = None
