@@ -212,16 +212,79 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    user[Usuário] --> cli[CLI]
+    user[Usuário] --> cli[CLI / Gateway HTTP]
     cli --> agent[AssistantAgent]
+    agent --> noexec[NoExecutionGuard]
+    noexec --> intent[DeterministicIntentRouter]
+    intent --> planner[Planner + fallback Ollama]
     agent --> session[SessionMemory]
-    agent --> markdown[Memória Markdown]
-    agent --> planner[Planner]
-    planner --> ollama[Ollama]
-    planner --> policy[Policy]
-    policy --> executor[Executor]
-    executor --> capabilities[Capabilities locais]
-    capabilities --> os[Windows / arquivos]
+    agent --> memory[MemoryEngine / SQLite]
+    planner --> binder[CapabilityArgumentResolver]
+    binder --> path[PathResolver]
+    path --> registry[CapabilityRegistry]
+    registry --> policy[Policy]
+    policy --> approval[Confirmação persistida]
+    policy --> executor[ActionExecutor]
+    approval --> executor
+    executor --> tools[Tool Runtime]
+    executor --> recovery[Recovery Harness]
+    tools --> os[Windows / filesystem]
+    recovery --> audit[Audit JSONL / SQLite]
+```
+
+### Estado implementado após P0/P1
+
+O runtime atual aplica guardas determinísticos antes de qualquer execução:
+
+1. `NoExecutionGuard` intercepta pedidos como "sem executar nada" antes do
+   planner e novamente antes do executor.
+2. `DeterministicIntentRouter` classifica intenções operacionais de alto sinal
+   antes do fallback do modelo. Shell explícito, PATH, criação/leitura de
+   arquivos, busca, movimento e simulação de exclusão não dependem da
+   interpretação livre do modelo.
+3. `CapabilityArgumentResolver` preenche apenas argumentos seguros definidos
+   pelo schema, como `root`, `source_root` e `cwd`.
+4. `PathResolver` resolve caminhos relativos e marcadores como `aqui`,
+   `nesta pasta` e `pasta atual` a partir de `current_cwd`, com
+   `default_search_root` como fallback operacional. Memórias de usuário não
+   são usadas para inventar caminhos.
+5. `CapabilityRegistry` valida schema e capability antes da policy.
+6. A policy decide `allow`, `confirm` ou `blocked`; confirmações são
+   persistidas pelo gateway.
+7. O executor retorna resultados de domínio estruturados, incluindo
+   `no_results`, `invalid_path` e `permission_denied`, em vez de propagar
+   exceções previsíveis como HTTP 500.
+
+```mermaid
+sequenceDiagram
+    actor U as Usuário
+    participant G as Gateway
+    participant A as AssistantAgent
+    participant N as NoExecutionGuard
+    participant I as IntentRouter
+    participant P as Planner
+    participant B as Argument/Path Binder
+    participant R as Registry + Policy
+    participant C as Confirmation Store
+    participant E as Executor
+
+    U->>G: mensagem + cwd operacional
+    G->>A: AgentRequest
+    A->>N: verificar proibição de execução
+    N-->>A: plano textual ou continuar
+    A->>I: classificar intenção de alto sinal
+    I-->>A: ação determinística ou sem correspondência
+    A->>P: fallback semântico quando necessário
+    A->>B: vincular argumentos seguros e caminhos
+    B->>R: validar capability, schema e policy
+    alt allow
+        R->>E: executar
+    else confirm
+        R->>C: persistir confirmação + dry-run
+        C-->>U: resumo, permissões e recursos afetados
+    else blocked
+        R-->>U: erro estruturado
+    end
 ```
 
 ### Arquitetura alvo
@@ -503,6 +566,75 @@ flowchart TD
     schema --> policy[Policy Engine]
 ```
 
+### 6.8 Adaptive Capability Provisioning
+
+O LangGraph é usado somente no lifecycle de provisionamento adaptativo. Ele
+não substitui o `AssistantAgent`, o planner geral, a registry, a policy ou o
+executor.
+
+```mermaid
+stateDiagram-v2
+    [*] --> CapabilityGapDetected
+    CapabilityGapDetected --> ToolProposed
+    ToolProposed --> ToolDraftCreated
+    ToolDraftCreated --> WaitingToolApproval
+    WaitingToolApproval --> ToolEnabled: approve_enable_only
+    WaitingToolApproval --> ToolEnabled: approve_enable_and_run_once elegível
+    WaitingToolApproval --> ToolRejected: reject
+    WaitingToolApproval --> ToolApprovalCancelled: cancel
+    ToolEnabled --> RuntimeReloaded
+    RuntimeReloaded --> WaitingRetryConfirmation
+    RuntimeReloaded --> ActionExecuted: run once read-only elegível
+    WaitingRetryConfirmation --> ActionExecuted: confirm
+    WaitingRetryConfirmation --> RetryRejected: reject
+    WaitingRetryConfirmation --> RetryCancelled: cancel
+    ActionExecuted --> [*]
+    ToolRejected --> [*]
+    ToolApprovalCancelled --> [*]
+    RetryRejected --> [*]
+    RetryCancelled --> [*]
+```
+
+Regras implementadas:
+
+- templates seguros são tentados antes da síntese model-backed;
+- o modelo propõe somente `ToolDefinition` JSON estruturada;
+- tools model-backed devem ser estritamente read-only, sem escrita, rede,
+  subprocess ou dependências;
+- validação de schema, permissões, AST e policy ocorre antes da criação do
+  draft;
+- o draft nasce em `ARGOS_HOME/tool-drafts`, validado e em
+  `pending_approval`, nunca habilitado automaticamente;
+- aprovação, instalação, enable e reload da sessão são explícitos e
+  idempotentes;
+- SQLite e repositórios do Argos continuam sendo fonte de verdade; o
+  checkpointer LangGraph mantém apenas estado transitório redigido;
+- `approve_enable_and_run_once` é revalidado pelo runtime e só vale para ação
+  read-only com policy final `allow`;
+- `shell.run` amplo permanece desabilitado e não dispara criação automática de
+  tool pela conversa.
+
+### 6.9 Harness integrado do gateway
+
+Os fluxos funcionais do runtime são verificados por um harness pytest que:
+
+- cria `ARGOS_HOME` e laboratório de arquivos temporários;
+- inicia fake Ollama e gateway Uvicorn em portas isoladas;
+- usa o gateway e a superfície CLI reais;
+- controla aprovações e workflows pendentes;
+- usa fake runner para mutações sensíveis de ambiente;
+- persiste e inspeciona logs;
+- falha se houver HTTP 500, traceback ASGI, efeito colateral indevido ou
+  `pending_approval` renderizado como erro.
+
+Os cenários vivem em:
+
+```text
+tests/integration/argos_gateway_harness.py
+tests/integration/gateway_harness_server.py
+tests/integration/test_argos_gateway_cli_flows.py
+```
+
 ---
 
 ## 7. Fluxos críticos
@@ -612,7 +744,9 @@ sequenceDiagram
 | Criar arquivo | confirm |
 | Editar arquivo | confirm |
 | Mover arquivo | confirm |
-| Executar shell | confirm com allowlist |
+| Executar shell genérico | blocked / unsupported no runtime atual |
+| Tool local read-only validada | allow após enable explícito |
+| Alterar variável de ambiente | template seguro + aprovação + confirmação |
 | Instalar tool | confirm |
 | Habilitar workflow | confirm |
 | Salvar memória importante | confirm |
@@ -715,6 +849,33 @@ flowchart TB
     adaptation --> adapterFiles[engine.py / pack_loader.py / prompt_registry.py / schema_registry.py / evaluator.py]
 ```
 
+### Módulos operacionais atuais
+
+```text
+src/assistant/
+  agent.py                         coordenação do turno e guardas finais
+  planner.py                       heurísticas, fallback estruturado e validação
+  intent/
+    router.py                      roteamento determinístico de alto sinal
+    no_execution_guard.py          bloqueio de execução e plano conceitual
+    pending_resolver.py            retomada de clarificações
+  capabilities/
+    registry.py                    capabilities, schemas e policy base
+    argument_resolver.py           binding seguro de contexto
+    provisioning.py                propostas, drafts e enable
+    adaptive_capability_graph.py   lifecycle LangGraph human-in-the-loop
+    workflow_repository.py         estado transitório e idempotência
+  files/
+    path_resolver.py               resolução relativa ao cwd operacional
+    resolver.py                    resolução/ambiguidade de arquivos existentes
+  execution/
+    executor.py                    execução e resultados de domínio
+    policy.py                      allow / confirm / blocked
+  recovery/                        classificação, dry-run e recuperação segura
+  gateway/                         HTTP, sessões, confirmações e reload
+  tools/                           catálogo, validação, instalação e runner
+```
+
 ---
 
 ## 11. Critérios de evolução
@@ -731,6 +892,10 @@ A arquitetura só deve evoluir se preservar estes critérios:
 | Sem script livre | O modelo não deve gerar código executável livre para ser rodado automaticamente. |
 | Sem segredos | Segredos não entram em memória, logs, prompts, evals ou datasets. |
 | Recuperação segura | Falhas podem gerar diagnóstico, mas não podem burlar policy. |
+| CWD operacional | Paths relativos usam o `cwd` informado pelo runtime, nunca um usuário inferido de memória. |
+| Resultados de domínio | Ausência de resultados e erros previsíveis não viram recovery destrutivo nem HTTP 500. |
+| Provisionamento adaptativo | Draft automático é quarentenado; enable e execução exigem decisão humana. |
+| Shell genérico | Permanece desabilitado até existir um desenho restrito e explicitamente aprovado. |
 | Evolução incremental | O sistema deve funcionar primeiro sem embeddings e sem fine-tuning. |
 
 ---
