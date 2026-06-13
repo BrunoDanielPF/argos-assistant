@@ -15,8 +15,10 @@ from assistant.capabilities.provisioning import (
 from assistant.capabilities.workflow_repository import (
     CapabilityWorkflowRecord,
     CapabilityWorkflowRepository,
+    PendingWorkflowLimit,
 )
 from assistant.workflows.redaction import redact_sensitive
+from assistant.workflows.redaction import REDACTED
 
 
 ToolDecision = Literal[
@@ -42,6 +44,7 @@ class CapabilityGraphState(TypedDict, total=False):
     enabled: dict
     execution_result: dict
     run_once_downgrade_reason: str
+    dry_run: dict
 
 
 class RunOnceEligibilityEvaluator:
@@ -71,6 +74,7 @@ class RunOnceEligibilityEvaluator:
         original_action: dict,
         policy: str,
         retry_status: str,
+        dry_run: dict,
     ) -> tuple[bool, str | None]:
         permissions = enabled.permissions
         if permissions.filesystem.write:
@@ -88,6 +92,12 @@ class RunOnceEligibilityEvaluator:
             return False, "secret_arguments"
         if retry_status != "pending":
             return False, f"retry_{retry_status}"
+        if (
+            not dry_run.get("can_execute")
+            or dry_run.get("requires_confirmation")
+            or dry_run.get("risk") != "low"
+        ):
+            return False, "dry_run_not_read_only"
         return True, None
 
     def _contains_secret(self, value: object) -> bool:
@@ -117,6 +127,7 @@ class AdaptiveCapabilityGraph:
         ttl: timedelta = timedelta(hours=24),
         now_fn: Callable[[], datetime] | None = None,
         eligibility_evaluator: RunOnceEligibilityEvaluator | None = None,
+        dry_run_builder: Callable[[str, dict, dict], dict] | None = None,
     ) -> None:
         self._provisioning_service = provisioning_service
         self._repository = repository
@@ -129,6 +140,8 @@ class AdaptiveCapabilityGraph:
         self._eligibility_evaluator = (
             eligibility_evaluator or RunOnceEligibilityEvaluator()
         )
+        self._dry_run_builder = dry_run_builder
+        self._ephemeral_arguments: dict[str, dict] = {}
         self._graph = self._build_graph().compile(checkpointer=checkpointer)
 
     def start(
@@ -157,6 +170,19 @@ class AdaptiveCapabilityGraph:
             platform_context=platform_context,
             original_action=original_action,
         )
+        return self.start_from_proposal(
+            session_id=session_id,
+            run_id=run_id,
+            proposal=proposal,
+        )
+
+    def start_from_proposal(
+        self,
+        *,
+        session_id: str,
+        run_id: str,
+        proposal: CapabilityProvisioningProposal,
+    ) -> dict:
         if not proposal.can_create or proposal.definition is None:
             return {
                 "ok": False,
@@ -177,17 +203,40 @@ class AdaptiveCapabilityGraph:
         )
         if equivalent is not None:
             return self._response_for_record(equivalent)
+        try:
+            self._repository.ensure_pending_capacity(session_id)
+        except PendingWorkflowLimit:
+            return {
+                "ok": True,
+                "result": "success_partial",
+                "status": "PENDING_DRAFT_LIMIT_REACHED",
+                "message": (
+                    "A sessao ja atingiu o limite de drafts pendentes. "
+                    "Revise ou cancele uma pendencia antes de criar outra."
+                ),
+                "error_code": None,
+            }
 
         workflow_id = str(uuid4())
+        original_arguments = proposal.original_action.get("arguments")
+        if self._requires_ephemeral_arguments(proposal.original_action):
+            self._ephemeral_arguments[workflow_id] = dict(
+                original_arguments
+                if isinstance(original_arguments, dict)
+                else {}
+            )
+        safe_proposal = self._sanitize_proposal(proposal)
         config = self._config(workflow_id)
         self._graph.invoke(
             {
                 "workflow_id": workflow_id,
-                "proposal": proposal.model_dump(mode="json"),
+                "proposal": safe_proposal,
                 "session_id": session_id,
                 "run_id": run_id,
-                "original_action": redact_sensitive(original_action),
-                "platform_context": redact_sensitive(platform_context),
+                "original_action": safe_proposal["original_action"],
+                "platform_context": redact_sensitive(
+                    proposal.platform_context
+                ),
                 "status": "CAPABILITY_GAP_DETECTED",
             },
             config,
@@ -222,6 +271,48 @@ class AdaptiveCapabilityGraph:
             self._config(workflow_id),
         )
         return self._response_for_record(self._require_record(workflow_id))
+
+    def list_pending(self, session_id: str | None = None) -> list[dict]:
+        return [
+            self._response_for_record(record)
+            for record in self._repository.list_pending(session_id)
+        ]
+
+    def cancel(self, workflow_id: str) -> dict:
+        record = self._require_record(workflow_id)
+        if record.status == "WAITING_TOOL_APPROVAL":
+            return self.decide_tool(workflow_id, "cancel")
+        if record.status == "WAITING_RETRY_CONFIRMATION":
+            return self.decide_retry(workflow_id, "cancel")
+        return self._response_for_record(record)
+
+    def cleanup_expired(
+        self,
+        *,
+        now: datetime | None = None,
+    ) -> list[str]:
+        expired_ids = []
+        for record in self._repository.list_expired(now=now):
+            if record.status == "WAITING_TOOL_APPROVAL" and record.draft_path:
+                proposal = CapabilityProvisioningProposal.model_validate(
+                    record.proposal
+                )
+                self._provisioning_service.expire_draft(
+                    proposal,
+                    record.draft_path,
+                )
+            transitioned = self._repository.transition(
+                record.workflow_id,
+                expected=record.status,
+                target="WORKFLOW_EXPIRED",
+            )
+            if transitioned is not None:
+                expired_ids.append(record.workflow_id)
+                self._audit(
+                    "capability_workflow_expired",
+                    {"workflow_id": record.workflow_id},
+                )
+        return expired_ids
 
     def _build_graph(self) -> StateGraph:
         graph = StateGraph(CapabilityGraphState)
@@ -332,7 +423,10 @@ class AdaptiveCapabilityGraph:
         )
         definition = proposal.definition
         assert definition is not None
-        read_only = self._is_read_only(definition.permissions)
+        read_only = self._can_offer_run_once(
+            definition.permissions,
+            proposal.original_action,
+        )
         options = ["approve_enable_only", "reject", "cancel"]
         if read_only:
             options.insert(0, "approve_enable_and_run_once")
@@ -433,7 +527,14 @@ class AdaptiveCapabilityGraph:
                 "session_id": state["session_id"],
             },
         )
-        return {"status": "RUNTIME_RELOADED"}
+        enabled = EnabledProvisionedTool.model_validate(state["enabled"])
+        action = self._provisioning_service.build_retry_action(enabled)
+        dry_run = self._build_dry_run(
+            enabled,
+            action,
+            dict(state.get("platform_context") or {}),
+        )
+        return {"status": "RUNTIME_RELOADED", "dry_run": dry_run}
 
     def _route_after_reload(self, state: CapabilityGraphState) -> str:
         if state["tool_decision"] != "approve_enable_and_run_once":
@@ -451,6 +552,7 @@ class AdaptiveCapabilityGraph:
             original_action=action,
             policy=policy,
             retry_status=record.retry_status,
+            dry_run=state["dry_run"],
         )
         if eligible:
             return "execute"
@@ -468,6 +570,7 @@ class AdaptiveCapabilityGraph:
             state["workflow_id"],
             expected="RUNTIME_RELOADED",
             target="WAITING_RETRY_CONFIRMATION",
+            execution_result={"dry_run": state["dry_run"]},
         )
         if record is not None:
             self._audit(
@@ -480,6 +583,7 @@ class AdaptiveCapabilityGraph:
                 "original_action": redact_sensitive(
                     state["original_action"]
                 ),
+                "dry_run": state["dry_run"],
                 "question": "Executar agora a acao original?",
                 "options": ["confirm", "reject", "cancel"],
             }
@@ -520,8 +624,29 @@ class AdaptiveCapabilityGraph:
                 "execution_result": record.execution_result or {},
             }
         self._audit("retry_confirmed", {"workflow_id": workflow_id})
-        action = dict(state["original_action"])
-        result = self._execute_action(state["session_id"], action)
+        enabled = EnabledProvisionedTool.model_validate(state["enabled"])
+        action = self._provisioning_service.build_retry_action(enabled)
+        ephemeral = self._ephemeral_arguments.get(workflow_id)
+        if (
+            enabled.tool_name == "local.windows.env_set_user"
+            and ephemeral is not None
+        ):
+            action["arguments"] = {
+                key: ephemeral[key]
+                for key in ("name", "value")
+                if key in ephemeral
+            }
+        if self._contains_redacted(action):
+            result = {
+                "ok": False,
+                "message": (
+                    "Os argumentos sensiveis nao estao mais disponiveis. "
+                    "Informe-os novamente para executar."
+                ),
+                "error_code": "sensitive_arguments_unavailable",
+            }
+        else:
+            result = self._execute_action(state["session_id"], action)
         retry_status = "executed" if result.get("ok") else "failed"
         self._repository.complete_retry(
             workflow_id,
@@ -546,6 +671,7 @@ class AdaptiveCapabilityGraph:
                 "ok": bool(result.get("ok")),
             },
         )
+        self._ephemeral_arguments.pop(workflow_id, None)
         return {"status": target, "execution_result": result}
 
     def _response_for_record(
@@ -559,7 +685,10 @@ class AdaptiveCapabilityGraph:
             definition = proposal.definition
             assert definition is not None
             options = ["approve_enable_only", "reject", "cancel"]
-            if self._is_read_only(definition.permissions):
+            if self._can_offer_run_once(
+                definition.permissions,
+                proposal.original_action,
+            ):
                 options.insert(0, "approve_enable_and_run_once")
             return {
                 "ok": True,
@@ -582,6 +711,11 @@ class AdaptiveCapabilityGraph:
                 "error_code": None,
             }
         if record.status == "WAITING_RETRY_CONFIRMATION":
+            dry_run = (
+                record.execution_result.get("dry_run")
+                if isinstance(record.execution_result, dict)
+                else None
+            )
             return {
                 "ok": True,
                 "result": "pending_confirmation",
@@ -591,6 +725,7 @@ class AdaptiveCapabilityGraph:
                     "Tool habilitada e registry da sessao recarregada. "
                     "Confirme separadamente a execucao da acao original."
                 ),
+                "approval": {"dry_run": dry_run},
                 "error_code": None,
             }
         result = {
@@ -633,6 +768,95 @@ class AdaptiveCapabilityGraph:
             and not permissions.subprocess.executables
         )
 
+    @classmethod
+    def _can_offer_run_once(cls, permissions, original_action: dict) -> bool:
+        capability = str(original_action.get("capability", "")).casefold()
+        if any(
+            marker in capability
+            for marker in (
+                "shell",
+                "environment",
+                "env.",
+                "system",
+                "delete",
+                "destroy",
+                "remove",
+                "write",
+                "move",
+            )
+        ):
+            return False
+        return cls._is_read_only(permissions)
+
     def _audit(self, event: str, details: dict) -> None:
         if self._audit_fn is not None:
             self._audit_fn(event, redact_sensitive(details))
+
+    def _build_dry_run(
+        self,
+        enabled: EnabledProvisionedTool,
+        action: dict,
+        context: dict,
+    ) -> dict:
+        if self._dry_run_builder is not None:
+            return self._dry_run_builder(
+                str(action["capability"]),
+                dict(action.get("arguments") or {}),
+                context,
+            )
+        permissions = enabled.permissions
+        return {
+            "action": action["capability"],
+            "risk": "low" if self._is_read_only(permissions) else "medium",
+            "requires_confirmation": not self._is_read_only(permissions),
+            "can_execute": True,
+            "permissions_required": (
+                [f"read:{item}" for item in permissions.filesystem.read]
+            ),
+            "expected_result": "A acao seria executada uma unica vez.",
+        }
+
+    @staticmethod
+    def _requires_ephemeral_arguments(action: dict) -> bool:
+        capability = str(action.get("capability", "")).casefold()
+        return any(
+            marker in capability
+            for marker in ("environment", "env.", "system_config")
+        )
+
+    @staticmethod
+    def _sanitize_proposal(
+        proposal: CapabilityProvisioningProposal,
+    ) -> dict:
+        payload = proposal.model_dump(mode="json")
+        payload["user_goal"] = REDACTED
+        payload["arguments"] = redact_sensitive(payload["arguments"])
+        action = redact_sensitive(payload["original_action"])
+        capability = str(action.get("capability", "")).casefold()
+        if any(
+            marker in capability
+            for marker in ("shell", "environment", "env.", "system")
+        ):
+            for key in ("command", "content", "value"):
+                if key in payload["arguments"]:
+                    payload["arguments"][key] = REDACTED
+        arguments = action.get("arguments")
+        if isinstance(arguments, dict) and any(
+            marker in capability
+            for marker in ("shell", "environment", "env.", "system")
+        ):
+            for key in ("command", "content", "value"):
+                if key in arguments:
+                    arguments[key] = REDACTED
+        payload["original_action"] = action
+        return payload
+
+    @classmethod
+    def _contains_redacted(cls, value: object) -> bool:
+        if value == REDACTED:
+            return True
+        if isinstance(value, dict):
+            return any(cls._contains_redacted(item) for item in value.values())
+        if isinstance(value, (list, tuple)):
+            return any(cls._contains_redacted(item) for item in value)
+        return False

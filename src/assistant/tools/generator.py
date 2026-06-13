@@ -3,6 +3,7 @@ from hashlib import sha256
 import json
 from pathlib import Path
 import re
+import shutil
 
 import yaml
 
@@ -141,3 +142,23 @@ class ToolDraftGenerator:
         target_state = "validated" if report.ok else "rejected"
         record = self._state_store.transition(name, version, target_state)
         return GeneratedToolDraft(path=draft_dir, state=record.state)
+
+    def remove_quarantined(
+        self,
+        *,
+        name: str,
+        version: str,
+        draft_path: Path,
+    ) -> bool:
+        root = self._drafts_root.resolve()
+        target = Path(draft_path).resolve()
+        if root not in target.parents:
+            raise ValueError("draft path is outside quarantine")
+        record = self._state_store.get(name, version)
+        if record is None or record.state not in {"validated", "rejected"}:
+            return False
+        if record.state == "validated":
+            self._state_store.transition(name, version, "rejected")
+        if target.is_dir():
+            shutil.rmtree(target)
+        return True

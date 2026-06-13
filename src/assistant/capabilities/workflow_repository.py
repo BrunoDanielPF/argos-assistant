@@ -128,17 +128,7 @@ class CapabilityWorkflowRepository:
     ) -> CapabilityWorkflowRecord:
         with self._lock, self._connection:
             if record.status == "WAITING_TOOL_APPROVAL":
-                count = self._connection.execute(
-                    """
-                    SELECT COUNT(*)
-                    FROM capability_workflows
-                    WHERE session_id = ?
-                      AND status = 'WAITING_TOOL_APPROVAL'
-                    """,
-                    (record.session_id,),
-                ).fetchone()[0]
-                if count >= self._max_pending_per_session:
-                    raise PendingWorkflowLimit(record.session_id)
+                self._ensure_pending_capacity_locked(record.session_id)
             self._connection.execute(
                 """
                 INSERT INTO capability_workflows (
@@ -165,6 +155,10 @@ class CapabilityWorkflowRepository:
                 self._record_values(record),
             )
         return record
+
+    def ensure_pending_capacity(self, session_id: str) -> None:
+        with self._lock:
+            self._ensure_pending_capacity_locked(session_id)
 
     def load(self, workflow_id: str) -> CapabilityWorkflowRecord | None:
         with self._lock:
@@ -437,6 +431,19 @@ class CapabilityWorkflowRepository:
     def close(self) -> None:
         with self._lock:
             self._connection.close()
+
+    def _ensure_pending_capacity_locked(self, session_id: str) -> None:
+        count = self._connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM capability_workflows
+            WHERE session_id = ?
+              AND status = 'WAITING_TOOL_APPROVAL'
+            """,
+            (session_id,),
+        ).fetchone()[0]
+        if count >= self._max_pending_per_session:
+            raise PendingWorkflowLimit(session_id)
 
     def _update_retry_status(
         self,

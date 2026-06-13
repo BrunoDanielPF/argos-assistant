@@ -254,6 +254,22 @@ class CapabilityProvisioningService:
     ) -> None:
         self._audit("tool_enablement_rejected", proposal)
 
+    def expire_draft(
+        self,
+        proposal: CapabilityProvisioningProposal,
+        draft_path: Path,
+    ) -> bool:
+        if proposal.definition is None:
+            return False
+        removed = self._generator.remove_quarantined(
+            name=proposal.definition.name,
+            version=proposal.definition.version,
+            draft_path=draft_path,
+        )
+        if removed:
+            self._audit("draft_expired", proposal)
+        return removed
+
     def record_enabled_event(
         self,
         event: str,
