@@ -188,13 +188,21 @@ def test_path_resolver_uses_current_cwd_for_context_markers_and_relative_paths(
     tmp_path,
 ):
     resolver = PathResolver()
-    context = {"current_cwd": str(tmp_path)}
+    context = {
+        "current_cwd": str(tmp_path),
+        "default_search_root": "C:\\fallback",
+        "user_home": "C:\\Users\\nome-antigo",
+    }
 
     assert resolver.resolve("aqui", context) == tmp_path.resolve()
     assert resolver.resolve("nesta pasta", context) == tmp_path.resolve()
+    assert resolver.resolve("pasta atual", context) == tmp_path.resolve()
     assert resolver.resolve("docs\\notes.txt", context) == (
         tmp_path / "docs" / "notes.txt"
     ).resolve()
+    assert "nome-antigo" not in str(
+        resolver.resolve("notes.txt", context)
+    )
 
 
 def test_planner_routes_create_read_open_and_search_deterministically(tmp_path):
@@ -415,7 +423,7 @@ def test_shell_request_is_unsupported_without_confirmation(tmp_path):
     assert "confirmation" not in response
 
 
-def test_shell_gap_proposes_draft_confirmation_without_execution(tmp_path):
+def test_shell_gap_stays_unsupported_when_provisioning_is_available(tmp_path):
     agent = AssistantAgent(
         planner=Planner(llm_client=FailIfCalledClient()),
         executor=FailIfCalledExecutor(),
@@ -429,15 +437,13 @@ def test_shell_gap_proposes_draft_confirmation_without_execution(tmp_path):
 
     response = agent.handle("rode o comando git status")
 
-    assert response["status"] == "waiting_confirmation"
-    assert response["error_code"] == "capability_gap"
-    assert response["confirmation"]["capability"] == "tool.provision_draft"
-    definition = response["confirmation"]["arguments"]["definition"]
-    assert definition["name"] == "local.git.status"
+    assert response["status"] == "completed"
+    assert response["error_code"] == "unsupported_capability"
+    assert "confirmation" not in response
     assert not (tmp_path / "drafts").exists()
 
 
-def test_approved_gap_confirmation_creates_draft_without_retry(tmp_path):
+def test_explicit_provisioning_proposal_creates_draft_without_retry(tmp_path):
     service = build_provisioning_service(tmp_path)
     agent = AssistantAgent(
         planner=Planner(llm_client=FailIfCalledClient()),
@@ -446,11 +452,22 @@ def test_approved_gap_confirmation_creates_draft_without_retry(tmp_path):
         capability_registry=build_default_registry(),
         capability_provisioning_service=service,
     )
-    pending = agent.handle("rode o comando git status")
+    proposal = service.propose(
+        requested_capability="shell.run",
+        user_goal="rode o comando git status",
+        arguments={"command": "git status"},
+        platform_context={"platform": "win32"},
+        original_action={
+            "mode": "action",
+            "capability": "shell.run",
+            "arguments": {"command": "git status"},
+            "context": {"current_cwd": str(tmp_path)},
+        },
+    )
 
     response = agent.execute_confirmed_action(
-        pending["confirmation"]["capability"],
-        pending["confirmation"]["arguments"],
+        "tool.provision_draft",
+        proposal.model_dump(),
         approved=True,
     )
 

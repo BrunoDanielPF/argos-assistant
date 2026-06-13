@@ -38,10 +38,28 @@ class DryRunBuilder:
         permissions = self._permissions(canonical, resources)
         risk = self._risk(canonical, policy)
         allowed = policy != "blocked"
-        if allowed:
+        resource_summary = (
+            ", ".join(resources) if resources else "os recursos informados"
+        )
+        if canonical == "file.delete_dry_run":
+            expected = (
+                "Esta simulacao apenas listaria os arquivos correspondentes "
+                f"em {resource_summary}. Nenhum arquivo seria alterado."
+            )
+        elif canonical == "file.delete_one" and allowed:
+            expected = (
+                f"A exclusao real excluiria {resource_summary}, somente "
+                "depois de confirmacao explicita."
+            )
+        elif canonical == "file.move_many" and allowed:
+            expected = (
+                f"A movimentacao alteraria {resource_summary}, somente "
+                "depois de confirmacao explicita."
+            )
+        elif allowed:
             expected = (
                 f"A acao {canonical} seria executada sobre "
-                f"{', '.join(resources) if resources else 'os recursos informados'}."
+                f"{resource_summary}."
             )
         else:
             expected = (

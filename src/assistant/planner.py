@@ -5,6 +5,8 @@ from pathlib import Path
 import re
 import unicodedata
 
+from assistant.intent.router import DeterministicIntentRouter
+
 
 class PlannerError(ValueError):
     pass
@@ -29,11 +31,13 @@ class Planner:
         capabilities: list[str] | None = None,
         loading_context=None,
         tool_definitions: list[dict] | None = None,
+        intent_router: DeterministicIntentRouter | None = None,
     ) -> None:
         self._llm_client = llm_client
         self._capabilities = capabilities or []
         self._loading_context = loading_context or nullcontext
         self._tool_definitions = tool_definitions or []
+        self._intent_router = intent_router or DeterministicIntentRouter()
 
     def _build_system_prompt(self, context: dict | None = None) -> str:
         context = context or {}
@@ -84,6 +88,13 @@ class Planner:
         pending_clarification = (context or {}).get("pending_clarification")
         if isinstance(pending_clarification, dict):
             return self._resolve_pending_clarification(user_input, pending_clarification)
+
+        routed_plan = self._intent_router.route(
+            user_input,
+            context=context or {},
+        )
+        if routed_plan is not None:
+            return self._validate_plan_shape(routed_plan)
 
         heuristic_plan = self._heuristic_plan(user_input, context=context)
         if heuristic_plan is not None:

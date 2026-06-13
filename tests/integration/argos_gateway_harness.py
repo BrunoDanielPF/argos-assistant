@@ -300,6 +300,11 @@ class ArgosGatewayHarness:
         self.responses.append(response)
         return response.json()["workflows"]
 
+    def read_session(self, session: str = "default") -> dict:
+        response = self._request("GET", f"/v1/sessions/{session}")
+        self.responses.append(response)
+        return response.json()
+
     def run_cli(self, *arguments: str) -> subprocess.CompletedProcess:
         return subprocess.run(
             [

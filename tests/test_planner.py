@@ -254,7 +254,7 @@ def test_planner_routes_shell_command_without_treating_it_as_a_file():
     }
 
 
-def test_planner_prefers_enabled_local_git_status_capability():
+def test_explicit_shell_syntax_stays_shell_when_specialized_tool_exists():
     planner = Planner(
         llm_client=FailIfCalledClient(),
         capabilities=["local.git.status"],
@@ -267,8 +267,8 @@ def test_planner_prefers_enabled_local_git_status_capability():
 
     assert plan == {
         "mode": "action",
-        "capability": "local.git.status",
-        "arguments": {"cwd": "C:\\workspace"},
+        "capability": "shell.run",
+        "arguments": {"command": "git status"},
     }
 
 

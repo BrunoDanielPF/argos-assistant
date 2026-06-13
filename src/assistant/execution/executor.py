@@ -286,11 +286,21 @@ class ActionExecutor:
                 for path in root.glob(pattern)
                 if path.is_file()
             )
+            resources = (
+                "\n".join(f"- {path}" for path in candidates)
+                if candidates
+                else "- Nenhum arquivo corresponde ao filtro."
+            )
             return ExecutionResult(
                 ok=True,
                 message=(
-                    f"Dry-run found {len(candidates)} candidate(s) "
-                    f"for '{pattern}' under '{root}'."
+                    "Simulacao (dry-run) de exclusao concluida. "
+                    "Nenhum arquivo foi alterado.\n"
+                    f"Filtro: {pattern}\n"
+                    f"Recursos afetados ({len(candidates)}):\n"
+                    f"{resources}\n"
+                    "Opcoes seguras: revise a lista, refine o filtro ou "
+                    "solicite a exclusao real com confirmacao."
                 ),
                 data={"candidates": candidates, "count": len(candidates)},
             )

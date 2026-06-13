@@ -1229,6 +1229,25 @@ class AssistantAgent:
                     error_code="policy_blocked",
                 )
             if (
+                capability_name == "shell.run"
+                and self._capability_registry is not None
+                and self._capability_registry.resolve(capability_name) is None
+            ):
+                response = self._build_response(
+                    ok=False,
+                    message=(
+                        "A capacidade shell.run esta desabilitada neste "
+                        "runtime. Nenhum comando foi executado."
+                    ),
+                    capability_name=capability_name,
+                    policy="blocked",
+                    decision="blocked",
+                    reason="shell_capability_disabled",
+                    error_code="unsupported_capability",
+                )
+                response["reason"] = "shell_capability_disabled"
+                return response
+            if (
                 self._capability_registry is not None
                 and self._capability_registry.resolve(capability_name) is None
                 and self._capability_provisioning_service is not None
