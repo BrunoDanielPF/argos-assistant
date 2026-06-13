@@ -176,6 +176,12 @@ class ActionExecutor:
                 )
 
             file_path = Path(path)
+            if file_path.is_dir():
+                return ExecutionResult(
+                    ok=False,
+                    message=f"Path is a directory, not a file: {path}",
+                    error_code="invalid_path",
+                )
             if not file_path.is_file():
                 return ExecutionResult(
                     ok=False,
@@ -183,13 +189,31 @@ class ActionExecutor:
                     error_code="not_found",
                 )
 
-            if write_mode == "overwrite":
-                updated_content = content
-            else:
-                current_content = file_path.read_text(encoding="utf-8")
-                separator = "" if not current_content or current_content.endswith("\n") else "\n"
-                updated_content = f"{current_content}{separator}{content}"
-            file_path.write_text(updated_content, encoding="utf-8")
+            try:
+                if write_mode == "overwrite":
+                    updated_content = content
+                else:
+                    current_content = file_path.read_text(encoding="utf-8")
+                    separator = (
+                        ""
+                        if not current_content
+                        or current_content.endswith("\n")
+                        else "\n"
+                    )
+                    updated_content = f"{current_content}{separator}{content}"
+                file_path.write_text(updated_content, encoding="utf-8")
+            except PermissionError:
+                return ExecutionResult(
+                    ok=False,
+                    message=f"Permission denied writing file: {file_path}",
+                    error_code="permission_denied",
+                )
+            except (OSError, UnicodeError) as exc:
+                return ExecutionResult(
+                    ok=False,
+                    message=f"Could not write file {file_path}: {exc}",
+                    error_code="execution_failed",
+                )
             return ExecutionResult(
                 ok=True,
                 message=f"Updated file {file_path}",

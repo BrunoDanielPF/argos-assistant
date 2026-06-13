@@ -132,6 +132,35 @@ def test_invalid_write_schema_never_reaches_confirmation(tmp_path):
     assert "confirmation" not in response
 
 
+def test_write_directory_is_rejected_without_fuzzy_file_resolution(tmp_path):
+    target = tmp_path / "backup"
+    target.mkdir()
+    agent = AssistantAgent(
+        planner=StaticPlanner(
+            {
+                "mode": "action",
+                "capability": "write_file",
+                "arguments": {
+                    "path": str(target),
+                    "content": "new",
+                    "mode": "overwrite",
+                },
+            }
+        ),
+        executor=FailIfCalledExecutor(),
+        memory=build_memory(tmp_path),
+        capability_registry=build_default_registry(),
+    )
+
+    response = agent.handle("write")
+
+    assert response["status"] == "completed"
+    assert response["ok"] is False
+    assert response["error_code"] == "invalid_path"
+    assert "clarification" not in response
+    assert "confirmation" not in response
+
+
 def test_empty_file_write_defaults_to_overwrite(tmp_path):
     target = tmp_path / "notes.txt"
     target.write_text("", encoding="utf-8")

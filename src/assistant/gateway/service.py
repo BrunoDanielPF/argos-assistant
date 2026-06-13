@@ -116,6 +116,7 @@ class GatewayService:
                 suggestions=result.get("suggestions", []),
                 confirmation=confirmation,
                 error_code=result.get("error_code"),
+                reason=result.get("reason"),
             )
 
     def resolve_capability_tool_decision(
@@ -189,17 +190,69 @@ class GatewayService:
         lock = self._get_session_lock(session_id)
         with lock:
             agent = self._get_or_create_agent_for_session(session_id)
-            result = agent.execute_confirmed_action(
-                pending["capability"],
-                pending["arguments"],
-                approved=approved,
-            )
-            self._repository.save(session_id, agent.memory.snapshot())
             request = AgentRequest(
                 session_id=session_id,
                 run_id=pending["run_id"],
                 content="confirmation decision",
             )
+            try:
+                result = agent.execute_confirmed_action(
+                    pending["capability"],
+                    pending["arguments"],
+                    approved=approved,
+                )
+            except PermissionError:
+                self._write_event(
+                    "confirmation_failed",
+                    request,
+                    {
+                        "capability": pending["capability"],
+                        "error_code": "permission_denied",
+                    },
+                )
+                return AgentResponse(
+                    session_id=session_id,
+                    run_id=pending["run_id"],
+                    ok=False,
+                    status="error",
+                    message="Permission denied while executing the action.",
+                    error_code="permission_denied",
+                )
+            except (KeyError, TypeError, ValueError):
+                self._write_event(
+                    "confirmation_failed",
+                    request,
+                    {
+                        "capability": pending["capability"],
+                        "error_code": "invalid_schema",
+                    },
+                )
+                return AgentResponse(
+                    session_id=session_id,
+                    run_id=pending["run_id"],
+                    ok=False,
+                    status="error",
+                    message="The confirmed action arguments are invalid.",
+                    error_code="invalid_schema",
+                )
+            except OSError:
+                self._write_event(
+                    "confirmation_failed",
+                    request,
+                    {
+                        "capability": pending["capability"],
+                        "error_code": "execution_failed",
+                    },
+                )
+                return AgentResponse(
+                    session_id=session_id,
+                    run_id=pending["run_id"],
+                    ok=False,
+                    status="error",
+                    message="The confirmed action could not be executed.",
+                    error_code="execution_failed",
+                )
+            self._repository.save(session_id, agent.memory.snapshot())
             if result.get("status") == "registry_reload_required":
                 reload_payload = result["reload"]
                 self._agents.pop(session_id, None)

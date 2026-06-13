@@ -58,6 +58,7 @@ class AgentResponse(StrictModel):
     suggestions: list[dict] = Field(default_factory=list)
     confirmation: ConfirmationRequest | None = None
     error_code: str | None = None
+    reason: str | None = None
     result: str | None = None
     workflow_id: str | None = None
     workflow_status: str | None = None

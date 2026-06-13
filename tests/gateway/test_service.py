@@ -394,6 +394,51 @@ def test_service_resumes_approved_confirmation_after_restart(tmp_path):
     repository.close()
 
 
+def test_service_maps_predictable_confirmation_failure(tmp_path):
+    class PermissionDeniedAgent:
+        def __init__(self, memory):
+            self.memory = memory
+
+        def handle(self, content):
+            return {
+                "ok": False,
+                "status": "waiting_confirmation",
+                "message": "Preciso de confirmacao.",
+                "suggestions": [],
+                "confirmation": {
+                    "capability": "file.write",
+                    "arguments": {
+                        "path": "C:\\restricted.txt",
+                        "content": "x",
+                        "mode": "overwrite",
+                    },
+                },
+            }
+
+        def execute_confirmed_action(self, capability, arguments, approved):
+            raise PermissionError("access denied")
+
+    class PermissionDeniedFactory:
+        def build_agent(self, memory=None, confirmer=None):
+            return PermissionDeniedAgent(memory or SessionMemory())
+
+    repository = SessionRepository(tmp_path / "argos.db")
+    service = GatewayService(PermissionDeniedFactory(), repository)
+    pending = service.handle(
+        AgentRequest(session_id="default", content="escreva")
+    )
+
+    result = service.resolve_confirmation(
+        pending.confirmation.confirmation_id,
+        approved=True,
+    )
+
+    assert result.ok is False
+    assert result.status == "error"
+    assert result.error_code == "permission_denied"
+    repository.close()
+
+
 def test_service_reloads_session_agent_and_persists_retry_confirmation(
     tmp_path,
 ):

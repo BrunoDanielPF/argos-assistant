@@ -754,6 +754,21 @@ class AssistantAgent:
         try:
             if canonical == "file.write":
                 raw_path = resolved_arguments["path"]
+                direct_path = self._path_resolver.resolve(
+                    raw_path,
+                    context,
+                )
+                if direct_path.exists() and not direct_path.is_file():
+                    return None, self._build_response(
+                        ok=False,
+                        message=(
+                            "Invalid path for file.write: "
+                            f"{direct_path} is not a file."
+                        ),
+                        capability_name=canonical,
+                        reason="invalid_path",
+                        error_code="invalid_path",
+                    )
                 roots = [
                     context[key]
                     for key in (
@@ -947,7 +962,7 @@ class AssistantAgent:
                 },
             )
         if not proposal.can_create:
-            return self._build_response(
+            response = self._build_response(
                 ok=False,
                 message=(
                     "Ainda nao tenho essa capacidade e nao encontrei um "
@@ -959,6 +974,8 @@ class AssistantAgent:
                 reason=proposal.reason,
                 error_code="capability_gap",
             )
+            response["reason"] = proposal.reason
+            return response
 
         message = (
             "Ainda não tenho essa capacidade. Posso criar uma tool local "

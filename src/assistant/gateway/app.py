@@ -93,6 +93,36 @@ def create_gateway_app(
                 status_code=409,
                 detail="Confirmation not found or already resolved",
             ) from exc
+        except PermissionError:
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "ok": False,
+                    "status": "error",
+                    "message": "Permission denied while resolving confirmation.",
+                    "error_code": "permission_denied",
+                },
+            )
+        except (KeyError, TypeError):
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "ok": False,
+                    "status": "error",
+                    "message": "Invalid confirmation payload.",
+                    "error_code": "invalid_schema",
+                },
+            )
+        except OSError:
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "ok": False,
+                    "status": "error",
+                    "message": "Confirmation execution failed.",
+                    "error_code": "execution_failed",
+                },
+            )
 
     @app.get(
         "/v1/capability-workflows",
