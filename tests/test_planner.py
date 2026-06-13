@@ -916,3 +916,54 @@ def test_planner_rejects_invalid_plan_shapes(response, error_message):
 
     with pytest.raises(PlannerError, match=error_message):
         planner.create_plan("open ollama website")
+
+
+def test_planner_routes_file_creation_metadata_to_capability_gap():
+    planner = Planner(llm_client=FailIfCalledClient())
+
+    plan = planner.create_plan(
+        "quero que me diga a data de criação do arquivo notes.txt"
+    )
+
+    assert plan == {
+        "mode": "action",
+        "capability": "file.metadata.stat",
+        "arguments": {"path": "notes.txt"},
+    }
+
+
+def test_planner_reuses_enabled_file_metadata_capability():
+    planner = Planner(
+        llm_client=FailIfCalledClient(),
+        capabilities=["file.metadata.stat"],
+    )
+
+    plan = planner.create_plan(
+        "qual a data de criacao do arquivo notes.txt"
+    )
+
+    assert plan["capability"] == "file.metadata.stat"
+
+
+def test_environment_intent_overrides_model_file_write_fallback():
+    planner = Planner(
+        llm_client=FakeMalformedClient(
+            {
+                "response": (
+                    '{"mode":"action","capability":"file.write",'
+                    '"arguments":{"path":"ARGOS_TESTE","content":"456"}}'
+                )
+            }
+        )
+    )
+
+    plan = planner.create_plan(
+        "defina ARGOS_TESTE como variavel de ambiente com valor 456"
+    )
+
+    assert plan["capability"] == "modify_environment_variable"
+    assert plan["arguments"] == {
+        "name": "ARGOS_TESTE",
+        "value": "456",
+        "scope": "user",
+    }

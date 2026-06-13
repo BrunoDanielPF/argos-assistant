@@ -11,6 +11,7 @@ from assistant.capabilities.provisioning import (
     CapabilityProvisioningProposal,
     EnabledProvisionedTool,
 )
+from assistant.capabilities.argument_resolver import CapabilityArgumentResolver
 from assistant.execution.policy import decide_policy
 from assistant.files.resolver import FileResolver
 from assistant.files.path_resolver import PathResolver
@@ -19,6 +20,7 @@ from assistant.intent.pending_resolver import (
     PendingClarificationResolver,
     PendingResolutionStatus,
 )
+from assistant.intent.no_execution_guard import NoExecutionGuard
 from assistant.memory.models import MemoryRecord
 from assistant.memory.session import SessionMemory
 from assistant.models import AuditEvent
@@ -44,6 +46,8 @@ class AssistantAgent:
         capability_registry: CapabilityRegistry | None = None,
         path_resolver: PathResolver | None = None,
         capability_provisioning_service=None,
+        capability_argument_resolver: CapabilityArgumentResolver | None = None,
+        no_execution_guard: NoExecutionGuard | None = None,
     ) -> None:
         self._planner = planner
         self._executor = executor
@@ -66,6 +70,12 @@ class AssistantAgent:
         self._capability_provisioning_service = (
             capability_provisioning_service
         )
+        self._capability_argument_resolver = (
+            capability_argument_resolver
+            or CapabilityArgumentResolver(self._capability_registry)
+        )
+        self._no_execution_guard = no_execution_guard or NoExecutionGuard()
+        self._execution_blocked = False
 
     @property
     def memory(self) -> SessionMemory:
@@ -161,6 +171,16 @@ class AssistantAgent:
         arguments: dict,
         policy: str | None = None,
     ):
+        if self._execution_blocked:
+            return type(
+                "Result",
+                (),
+                {
+                    "ok": True,
+                    "message": "Execucao bloqueada por solicitacao do usuario.",
+                    "data": None,
+                },
+            )()
         policy = policy or self._policy_decider(capability_name)
 
         if policy == "blocked":
@@ -704,7 +724,11 @@ class AssistantAgent:
         context: dict,
     ) -> tuple[tuple[str, dict, str] | None, dict | None]:
         assert self._capability_registry is not None
-        normalized_input = dict(arguments)
+        normalized_input = self._capability_argument_resolver.resolve(
+            capability_name,
+            arguments,
+            context,
+        )
         if "write_mode" in normalized_input and "mode" not in normalized_input:
             normalized_input["mode"] = normalized_input.pop("write_mode")
         if normalized_input.get("mode") == "replace":
@@ -1063,6 +1087,12 @@ class AssistantAgent:
         return result
 
     def _handle(self, user_input: str) -> dict:
+        self._execution_blocked = self._no_execution_guard.blocks(user_input)
+        if self._execution_blocked:
+            self._memory.add_user_message(user_input)
+            return self._build_answer_response(
+                self._no_execution_guard.conceptual_plan(user_input)
+            )
         snapshot = self._memory.snapshot()
         previous_history = snapshot.get("history", [])
         snapshot_context = dict(snapshot.get("context") or {})

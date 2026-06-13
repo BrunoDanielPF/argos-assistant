@@ -149,6 +149,7 @@ class Planner:
                 response_text = self._extract_response_text(response)
                 parsed = self._parse_response_text(response_text)
         parsed = self._apply_explicit_file_path(user_input, parsed)
+        parsed = self._apply_semantic_intent_guard(user_input, parsed)
         return self._validate_plan_shape(parsed)
 
     @staticmethod
@@ -257,7 +258,23 @@ class Planner:
     def _heuristic_plan(self, user_input: str, context: dict | None = None) -> dict | None:
         normalized_input = user_input.strip()
         lowered_input = normalized_input.lower()
+        ascii_input = self._normalize_text(normalized_input)
         context = context or {}
+
+        metadata_request = re.search(
+            r"(?:data|hora).{0,30}(?:criacao|criado|criada).+?"
+            r"arquivo\s+(.+)$",
+            ascii_input,
+            flags=re.IGNORECASE,
+        )
+        if metadata_request:
+            return {
+                "mode": "action",
+                "capability": "file.metadata.stat",
+                "arguments": {
+                    "path": metadata_request.group(1).strip().strip('"'),
+                },
+            }
 
         if re.fullmatch(
             r"(?:onde|em que (?:pasta|diret[oÃ³]rio)) "
@@ -313,9 +330,11 @@ class Planner:
             }
 
         search_current = re.fullmatch(
-            r"(?:buscar|busque|procure)\s+arquivos?\s+"
-            r"(\*?\.[A-Za-z0-9]+|[A-Za-z0-9]+)\s+"
-            r"(?:nesta pasta|nessa pasta|aqui|na pasta atual)",
+            r"(?:buscar|busque|procure|liste|listar|mostre|"
+            r"quais(?:\s+s[aã]o)?)(?:\s+os)?\s+arquivos?\s+"
+            r"(\*?\.[A-Za-z0-9]+|[A-Za-z0-9]+)"
+            r"(?:\s+(?:existem?\s+)?"
+            r"(?:nesta pasta|nessa pasta|aqui|na pasta atual))?",
             normalized_input,
             flags=re.IGNORECASE,
         )
@@ -639,6 +658,42 @@ class Planner:
                 }
 
         return None
+
+    def _apply_semantic_intent_guard(
+        self,
+        user_input: str,
+        plan: dict,
+    ) -> dict:
+        normalized = self._normalize_text(user_input)
+        if "variavel de ambiente" not in normalized:
+            return plan
+        match = re.search(
+            r"(?:defina|configure|configurar)\s+"
+            r"(?:uma\s+vari[aá]vel\s+de\s+ambiente\s+chamada\s+)?"
+            r"([A-Za-z_][A-Za-z0-9_]*)\s+"
+            r"(?:como\s+vari[aá]vel\s+de\s+ambiente\s+)?"
+            r"com\s+valor\s+(.+)$",
+            user_input,
+            flags=re.IGNORECASE,
+        )
+        if match is None:
+            return plan
+        capability = (
+            "local.windows.env_set_user"
+            if "local.windows.env_set_user" in self._capabilities
+            else "modify_environment_variable"
+        )
+        arguments = {
+            "name": match.group(1),
+            "value": match.group(2).strip(),
+        }
+        if capability == "modify_environment_variable":
+            arguments["scope"] = "user"
+        return {
+            "mode": "action",
+            "capability": capability,
+            "arguments": arguments,
+        }
 
     def _heuristic_reminder_plan(self, user_input: str) -> dict:
         normalized = self._normalize_text(user_input)

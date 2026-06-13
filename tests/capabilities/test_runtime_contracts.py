@@ -204,6 +204,77 @@ def test_planner_routes_create_read_open_and_search_deterministically(tmp_path):
             "max_results": 5,
         },
     }
+    assert planner.create_plan(
+        "liste os arquivos txt nesta pasta",
+        context=context,
+    )["arguments"]["root"] == str(tmp_path)
+
+
+def test_missing_files_search_root_is_bound_before_registry_validation(
+    tmp_path,
+):
+    (tmp_path / "notes.txt").write_text("ok", encoding="utf-8")
+    agent = AssistantAgent(
+        planner=StaticPlanner(
+            {
+                "mode": "action",
+                "capability": "files.search",
+                "arguments": {"pattern": "*.txt"},
+            }
+        ),
+        executor=ActionExecutor(),
+        memory=build_memory(tmp_path),
+        capability_registry=build_default_registry(),
+    )
+
+    response = agent.handle("liste os arquivos txt nesta pasta")
+
+    assert response["ok"] is True
+    assert str(tmp_path / "notes.txt") in response["message"]
+
+
+def test_planner_supports_file_listing_verbs_without_explicit_location(
+    tmp_path,
+):
+    planner = Planner(llm_client=FailIfCalledClient())
+
+    for prompt in (
+        "listar arquivos txt",
+        "mostre os arquivos txt",
+        "quais arquivos txt",
+    ):
+        plan = planner.create_plan(
+            prompt,
+            context={"default_search_root": str(tmp_path)},
+        )
+        assert plan["capability"] == "files.search"
+        assert plan["arguments"]["root"] == str(tmp_path)
+
+
+def test_no_execution_guard_returns_plan_without_planning_or_execution(
+    tmp_path,
+):
+    class FailPlanner:
+        def create_plan(self, *_args, **_kwargs):
+            raise AssertionError("planner must not run")
+
+    agent = AssistantAgent(
+        planner=FailPlanner(),
+        executor=FailIfCalledExecutor(),
+        memory=build_memory(tmp_path),
+        capability_registry=build_default_registry(),
+        capability_provisioning_service=build_provisioning_service(tmp_path),
+    )
+
+    response = agent.handle(
+        "sem executar nada, qual seria o plano para mover arquivos txt "
+        "para uma pasta backup?"
+    )
+
+    assert response["ok"] is True
+    assert response["status"] == "completed"
+    assert "Plano conceitual" in response["message"]
+    assert not (tmp_path / "drafts").exists()
 
 
 def test_delete_dry_run_lists_candidates_without_deleting(tmp_path):
@@ -248,6 +319,56 @@ def test_policy_uses_canonical_capability_contracts():
     assert decide_policy("file.move_many", registry=registry) == "confirm"
     assert decide_policy("file.delete_one", registry=registry) == "confirm"
     assert decide_policy("does.not.exist", registry=registry) == "blocked"
+
+
+def test_dynamic_read_only_tool_uses_allow_policy(tmp_path):
+    from tests.tools.test_state_catalog import create_installed_tool
+    from assistant.tools.catalog import ToolCatalog
+    from assistant.tools.state import hash_tool_files
+
+    tool_dir = create_installed_tool(
+        tmp_path / "tools",
+        name="file.metadata.stat",
+    )
+    store = ToolStateStore(tmp_path / "state.json")
+    store.register_draft(
+        "file.metadata.stat",
+        "1.0.0",
+        hash_tool_files(tool_dir),
+    )
+    for state in ("validating", "validated", "approved", "installed", "enabled"):
+        store.transition("file.metadata.stat", "1.0.0", state)
+    registry = build_default_registry(
+        ToolCatalog(tmp_path / "tools", store)
+    )
+
+    assert registry.resolve("file.metadata.stat").policy == "allow"
+
+
+def test_dynamic_environment_tool_requires_confirmation_even_without_io_permissions(
+    tmp_path,
+):
+    from tests.tools.test_state_catalog import create_installed_tool
+    from assistant.tools.catalog import ToolCatalog
+    from assistant.tools.state import hash_tool_files
+
+    tool_dir = create_installed_tool(
+        tmp_path / "tools",
+        name="local.windows.env_set_user",
+    )
+    store = ToolStateStore(tmp_path / "state.json")
+    store.register_draft(
+        "local.windows.env_set_user",
+        "1.0.0",
+        hash_tool_files(tool_dir),
+    )
+    for state in ("validating", "validated", "approved", "installed", "enabled"):
+        store.transition("local.windows.env_set_user", "1.0.0", state)
+    registry = build_default_registry(
+        ToolCatalog(tmp_path / "tools", store)
+    )
+
+    assert registry.resolve("local.windows.env_set_user").policy == "confirm"
 
 
 def test_shell_request_is_unsupported_without_confirmation(tmp_path):
