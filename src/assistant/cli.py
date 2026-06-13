@@ -444,6 +444,43 @@ def build_tool_catalog(config: AppConfig | None = None) -> ToolCatalog:
     )
 
 
+@tools_app.command("pending")
+def tools_pending(
+    session: str = typer.Option("default", "--session"),
+) -> None:
+    try:
+        workflows = build_gateway_client().list_capability_workflows(session)
+    except GatewayError as exc:
+        render_gateway_error(exc)
+        raise typer.Exit(code=1) from exc
+    if not workflows:
+        console.print("Nenhum workflow de tool pendente.")
+        return
+    for workflow in workflows:
+        tool_name = workflow.get("tool_name") or "tool desconhecida"
+        version = workflow.get("tool_version") or "versao desconhecida"
+        console.print(
+            f"{workflow.get('workflow_id')} "
+            f"{workflow.get('status')} "
+            f"{tool_name}@{version}",
+            markup=False,
+        )
+
+
+@tools_app.command("cancel")
+def tools_cancel(workflow_id: str) -> None:
+    try:
+        response = build_gateway_client().cancel_capability_workflow(
+            workflow_id
+        )
+    except GatewayError as exc:
+        render_gateway_error(exc)
+        raise typer.Exit(code=1) from exc
+    console.print(response.message, markup=False)
+    if not response.ok:
+        raise typer.Exit(code=1)
+
+
 @tools_app.command("list")
 def tools_list() -> None:
     tools = build_tool_catalog().list_enabled()

@@ -131,6 +131,67 @@ class AppConfig(BaseModel):
         )
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_argos_home_paths(cls, values):
+        if not isinstance(values, dict):
+            return values
+        resolved = dict(values)
+        argos_home = Path(
+            resolved.get(
+                "argos_home",
+                os.environ.get("ARGOS_HOME", Path.home() / ".argos"),
+            )
+        )
+        relative_defaults = {
+            "gateway_token_file": (
+                "ARGOS_GATEWAY_TOKEN_FILE",
+                "gateway.token",
+            ),
+            "gateway_pid_file": ("ARGOS_GATEWAY_PID_FILE", "gateway.pid"),
+            "gateway_log_file": (
+                "ARGOS_GATEWAY_LOG_FILE",
+                Path("logs") / "gateway.log",
+            ),
+            "database_file": ("ARGOS_DATABASE_FILE", "argos.db"),
+            "capability_checkpoint_file": (
+                "ARGOS_CAPABILITY_CHECKPOINT_FILE",
+                "capability-checkpoints.db",
+            ),
+            "event_log_file": (
+                "ARGOS_EVENT_LOG_FILE",
+                Path("logs") / "events.jsonl",
+            ),
+            "memory_dir": ("ARGOS_MEMORY_DIR", "memory"),
+            "tools_dir": ("ARGOS_TOOLS_DIR", "tools"),
+            "tool_drafts_dir": (
+                "ARGOS_TOOL_DRAFTS_DIR",
+                "tool-drafts",
+            ),
+            "tool_envs_dir": ("ARGOS_TOOL_ENVS_DIR", "tool-envs"),
+            "tool_state_file": (
+                "ARGOS_TOOL_STATE_FILE",
+                "tool-state.json",
+            ),
+            "tool_audit_file": (
+                "ARGOS_TOOL_AUDIT_FILE",
+                Path("audit") / "tools.jsonl",
+            ),
+            "recovery_audit_file": (
+                "ARGOS_RECOVERY_AUDIT_FILE",
+                Path("audit") / "recovery.jsonl",
+            ),
+        }
+        resolved.setdefault("argos_home", argos_home)
+        for field_name, (env_name, relative_path) in relative_defaults.items():
+            resolved.setdefault(
+                field_name,
+                Path(os.environ[env_name])
+                if env_name in os.environ
+                else argos_home / relative_path,
+            )
+        return resolved
+
     @model_validator(mode="after")
     def resolve_capability_checkpoint_file(self):
         if self.capability_checkpoint_file is None:
@@ -141,8 +202,14 @@ class AppConfig(BaseModel):
 
     @classmethod
     def load(cls, path: Path | None = None) -> "AppConfig":
+        default_home = Path(
+            os.environ.get("ARGOS_HOME", Path.home() / ".argos")
+        )
         config_path = path or Path(
-            os.environ.get("ARGOS_CONFIG_FILE", Path.home() / ".argos" / "config.yaml")
+            os.environ.get(
+                "ARGOS_CONFIG_FILE",
+                default_home / "config.yaml",
+            )
         )
         values: dict = {}
         if config_path.exists():
