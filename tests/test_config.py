@@ -44,6 +44,38 @@ def test_memory_auto_save_can_be_enabled_from_environment(tmp_path, monkeypatch)
     assert config.memory_auto_save_low_risk is True
 
 
+def test_capability_workflow_defaults_use_durable_local_checkpoint():
+    config = AppConfig()
+
+    assert config.capability_checkpoint_file == (
+        config.argos_home / "capability-checkpoints.db"
+    )
+    assert config.capability_workflow_ttl_hours == 24
+    assert config.max_pending_capability_workflows_per_session == 3
+
+
+def test_capability_workflow_settings_can_be_overridden(
+    tmp_path,
+    monkeypatch,
+):
+    checkpoint = tmp_path / "capability-checkpoints.db"
+    monkeypatch.setenv(
+        "ARGOS_CAPABILITY_CHECKPOINT_FILE",
+        str(checkpoint),
+    )
+    monkeypatch.setenv("ARGOS_CAPABILITY_WORKFLOW_TTL_HOURS", "12")
+    monkeypatch.setenv(
+        "ARGOS_MAX_PENDING_CAPABILITY_WORKFLOWS_PER_SESSION",
+        "2",
+    )
+
+    config = AppConfig.load(tmp_path / "missing.yaml")
+
+    assert config.capability_checkpoint_file == checkpoint
+    assert config.capability_workflow_ttl_hours == 12
+    assert config.max_pending_capability_workflows_per_session == 2
+
+
 def test_config_rejects_gateway_bind_outside_loopback(tmp_path):
     config_file = tmp_path / "config.yaml"
     config_file.write_text(
